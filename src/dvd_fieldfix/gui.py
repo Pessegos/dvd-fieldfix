@@ -43,7 +43,7 @@ class QueueItem:
     path: Path
     analysis: AnalysisResult | None = None
     override: ProcessingMode = ProcessingMode.AUTO
-    status: str = "Por analisar"
+    status: str = "Not analyzed"
     output: Path | None = None
 
 
@@ -116,21 +116,21 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
     def _build_ui(self) -> None:
         toolbar = ttk.Frame(self, padding=8)
         toolbar.pack(fill=tk.X)
-        ttk.Button(toolbar, text="Adicionar ficheiros", command=self._add_files).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="Adicionar pasta", command=self._add_folder).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="Remover", command=self._remove_selected).pack(side=tk.LEFT, padx=3)
+        ttk.Button(toolbar, text="Add files", command=self._add_files).pack(side=tk.LEFT, padx=3)
+        ttk.Button(toolbar, text="Add folder", command=self._add_folder).pack(side=tk.LEFT, padx=3)
+        ttk.Button(toolbar, text="Remove", command=self._remove_selected).pack(side=tk.LEFT, padx=3)
         ttk.Button(toolbar, text="Doctor", command=self._doctor).pack(side=tk.LEFT, padx=12)
-        ttk.Button(toolbar, text="Guardar relatório", command=self._save_report).pack(side=tk.LEFT, padx=3)
+        ttk.Button(toolbar, text="Save report", command=self._save_report).pack(side=tk.LEFT, padx=3)
 
         columns = ("file", "classification", "confidence", "action", "crop", "status")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
         headings = {
-            "file": "Ficheiro",
-            "classification": "Deteção",
-            "confidence": "Confiança",
-            "action": "Ação",
-            "crop": "Crop detetado",
-            "status": "Estado",
+            "file": "File",
+            "classification": "Detection",
+            "confidence": "Confidence",
+            "action": "Action",
+            "crop": "Detected crop",
+            "status": "Status",
         }
         widths = {
             "file": 350,
@@ -148,7 +148,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             self.tree.drop_target_register(DND_FILES)
             self.tree.dnd_bind("<<Drop>>", self._drop_files)
 
-        options = ttk.LabelFrame(self, text="Opções", padding=8)
+        options = ttk.LabelFrame(self, text="Options", padding=8)
         options.pack(fill=tk.X, padx=10, pady=4)
         ttk.Label(options, text="Codec:").grid(row=0, column=0, sticky=tk.W)
         self.codec_var = tk.StringVar(value=CodecProfile.H264.value)
@@ -159,7 +159,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             state="readonly",
             width=12,
         ).grid(row=0, column=1, padx=(4, 14))
-        ttk.Label(options, text="Override selecionados:").grid(row=0, column=2, sticky=tk.W)
+        ttk.Label(options, text="Override selected:").grid(row=0, column=2, sticky=tk.W)
         self.mode_var = tk.StringVar(value=ProcessingMode.AUTO.value)
         ttk.Combobox(
             options,
@@ -168,44 +168,44 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             state="readonly",
             width=12,
         ).grid(row=0, column=3, padx=4)
-        ttk.Button(options, text="Aplicar", command=self._apply_override).grid(row=0, column=4, padx=(0, 14))
-        ttk.Label(options, text="Crop manual L:T:R:B:").grid(row=0, column=5, sticky=tk.W)
+        ttk.Button(options, text="Apply", command=self._apply_override).grid(row=0, column=4, padx=(0, 14))
+        ttk.Label(options, text="Manual crop L:T:R:B:").grid(row=0, column=5, sticky=tk.W)
         self.crop_var = tk.StringVar()
         ttk.Entry(options, textvariable=self.crop_var, width=13).grid(row=0, column=6, padx=4)
         self.auto_crop_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(options, text="Auto crop", variable=self.auto_crop_var).grid(row=0, column=7, padx=10)
         self.denoise_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options, text="Limpeza leve", variable=self.denoise_var).grid(row=1, column=8, padx=10, pady=(8, 0))
+        ttk.Checkbutton(options, text="Light denoise", variable=self.denoise_var).grid(row=1, column=8, padx=10, pady=(8, 0))
 
-        ttk.Label(options, text="Destino (vazio = _fixed):").grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ttk.Label(options, text="Output (blank = _fixed):").grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
         self.output_var = tk.StringVar()
         ttk.Entry(options, textvariable=self.output_var).grid(
             row=1, column=2, columnspan=5, sticky=tk.EW, padx=4, pady=(8, 0)
         )
-        ttk.Button(options, text="Escolher…", command=self._choose_output).grid(row=1, column=7, pady=(8, 0))
+        ttk.Button(options, text="Browse…", command=self._choose_output).grid(row=1, column=7, pady=(8, 0))
         options.columnconfigure(6, weight=1)
 
         actions = ttk.Frame(self, padding=(10, 6))
         actions.pack(fill=tk.X)
-        self.analyze_button = ttk.Button(actions, text="Analisar", command=self._start_analysis)
+        self.analyze_button = ttk.Button(actions, text="Analyze", command=self._start_analysis)
         self.analyze_button.pack(side=tk.LEFT, padx=3)
-        self.preview_button = ttk.Button(actions, text="Pré-visualizar", command=self._start_preview)
+        self.preview_button = ttk.Button(actions, text="Preview", command=self._start_preview)
         self.preview_button.pack(side=tk.LEFT, padx=3)
-        self.process_button = ttk.Button(actions, text="Processar", command=self._start_processing)
+        self.process_button = ttk.Button(actions, text="Process", command=self._start_processing)
         self.process_button.pack(side=tk.LEFT, padx=3)
-        self.cancel_button = ttk.Button(actions, text="Cancelar", command=self._cancel, state=tk.DISABLED)
+        self.cancel_button = ttk.Button(actions, text="Cancel", command=self._cancel, state=tk.DISABLED)
         self.cancel_button.pack(side=tk.LEFT, padx=12)
-        ttk.Button(actions, text="Abrir destino", command=self._open_output).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="Open output", command=self._open_output).pack(side=tk.LEFT, padx=3)
         self.progress = ttk.Progressbar(actions, maximum=100)
         self.progress.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(20, 0))
 
         self.status_var = tk.StringVar(
-            value="Arraste MKVs para a fila." if HAS_DND else "Adicione MKVs pelos botões acima."
+            value="Drag MKVs into the queue." if HAS_DND else "Add MKVs using the buttons above."
         )
         ttk.Label(self, textvariable=self.status_var, padding=(10, 4)).pack(fill=tk.X)
 
     def _add_files(self) -> None:
-        paths = filedialog.askopenfilenames(filetypes=[("Matroska", "*.mkv"), ("Todos", "*.*")])
+        paths = filedialog.askopenfilenames(filetypes=[("Matroska", "*.mkv"), ("All files", "*.*")])
         self._add_paths(paths)
 
     def _add_folder(self) -> None:
@@ -228,8 +228,8 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             if key in self.items:
                 continue
             self.items[key] = QueueItem(path)
-            self.tree.insert("", tk.END, iid=key, values=(path.name, "—", "—", "auto", "—", "Por analisar"))
-        self.status_var.set(f"{len(self.items)} ficheiro(s) na fila")
+            self.tree.insert("", tk.END, iid=key, values=(path.name, "—", "—", "auto", "—", "Not analyzed"))
+        self.status_var.set(f"{len(self.items)} file(s) in the queue")
 
     def _remove_selected(self) -> None:
         for key in self.tree.selection():
@@ -267,15 +267,15 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
     def _start_analysis(self) -> None:
         items = self._selected_items()
         if not items:
-            messagebox.showinfo("DVD FieldFix", "Adicione pelo menos um MKV.")
+            messagebox.showinfo("DVD FieldFix", "Add at least one MKV.")
             return
         self._run_worker(lambda: self._analysis_worker(items))
 
     def _analysis_worker(self, items: list[QueueItem]) -> None:
         for index, item in enumerate(items, 1):
             if self.cancel_event.is_set():
-                raise CancelledError("Análise cancelada")
-            self._set_item_status(item, "A analisar")
+                raise CancelledError("Analysis cancelled")
+            self._set_item_status(item, "Analyzing")
 
             def callback(value: float, stage: str, current: int = index) -> None:
                 overall = ((current - 1) + value) / len(items)
@@ -293,24 +293,24 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
     def _start_processing(self) -> None:
         items = self._selected_items()
         if not items:
-            messagebox.showinfo("DVD FieldFix", "Adicione pelo menos um MKV.")
+            messagebox.showinfo("DVD FieldFix", "Add at least one MKV.")
             return
         try:
             config = self._config()
         except ValueError as exc:
-            messagebox.showerror("Opções inválidas", str(exc))
+            messagebox.showerror("Invalid options", str(exc))
             return
         self._run_worker(lambda: self._processing_worker(items, config))
 
     def _processing_worker(self, items: list[QueueItem], base_config: JobConfig) -> None:
         for index, item in enumerate(items, 1):
             if self.cancel_event.is_set():
-                raise CancelledError("Processamento cancelado")
+                raise CancelledError("Processing cancelled")
             if item.analysis is None:
-                self._set_item_status(item, "A analisar")
+                self._set_item_status(item, "Analyzing")
                 item.analysis = analyze_file(item.path, self.tools, cancel_event=self.cancel_event)
             config = replace(base_config, mode=item.override)
-            self._set_item_status(item, "A processar")
+            self._set_item_status(item, "Processing")
 
             def callback(value: float, stage: str, current: int = index) -> None:
                 overall = ((current - 1) + value) / len(items)
@@ -324,25 +324,25 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
                 progress=callback,
             )
             item.output = Path(result.output)
-            item.status = "Já concluído" if result.skipped else "Concluído e validado"
+            item.status = "Already completed" if result.skipped else "Completed and validated"
             self.after(0, self._refresh_item, item)
 
     def _start_preview(self) -> None:
         selected = self._selected_items(require_one=True)
         if len(selected) != 1:
-            messagebox.showinfo("DVD FieldFix", "Selecione exatamente um ficheiro.")
+            messagebox.showinfo("DVD FieldFix", "Select exactly one file.")
             return
         item = selected[0]
         try:
             config = self._config(item.override)
         except ValueError as exc:
-            messagebox.showerror("Opções inválidas", str(exc))
+            messagebox.showerror("Invalid options", str(exc))
             return
         self._run_worker(lambda: self._preview_worker(item, config))
 
     def _preview_worker(self, item: QueueItem, config: JobConfig) -> None:
         if item.analysis is None:
-            self._set_item_status(item, "A analisar para pré-visualização")
+            self._set_item_status(item, "Analyzing for preview")
             item.analysis = analyze_file(item.path, self.tools, cancel_event=self.cancel_event)
         original, corrected, directory = generate_preview(item.analysis, config, self.tools)
         self.preview_directories.append(directory)
@@ -350,7 +350,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
 
     def _show_preview(self, item: QueueItem, original: Path, corrected: Path) -> None:
         window = tk.Toplevel(self)
-        window.title(f"Pré-visualização — {item.path.name}")
+        window.title(f"Preview — {item.path.name}")
         window.configure(background=BG)
         window.after(50, _set_dark_titlebar, window)
         frame = ttk.Frame(window, padding=8)
@@ -358,7 +358,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         original_image = tk.PhotoImage(file=str(original))
         corrected_image = tk.PhotoImage(file=str(corrected))
         ttk.Label(frame, text="Original").grid(row=0, column=0)
-        ttk.Label(frame, text="Corrigido").grid(row=0, column=1)
+        ttk.Label(frame, text="Corrected").grid(row=0, column=1)
         left = ttk.Label(frame, image=original_image)
         right = ttk.Label(frame, image=corrected_image)
         left.grid(row=1, column=0, padx=4)
@@ -366,27 +366,27 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         window._images = (original_image, corrected_image)  # type: ignore[attr-defined]
 
     def _doctor(self) -> None:
-        self.status_var.set("A validar dependências…")
+        self.status_var.set("Checking dependencies…")
 
         def worker() -> None:
             report = self.tools.doctor(deep_qtgmc=True)
-            lines = [f"{'OK' if check.ok else 'FALHA'} — {check.name}: {check.detail}" for check in report.checks]
+            lines = [f"{'OK' if check.ok else 'FAIL'} — {check.name}: {check.detail}" for check in report.checks]
             self.after(0, messagebox.showinfo, "Doctor", "\n\n".join(lines))
-            self.after(0, self.status_var.set, "Doctor concluído")
+            self.after(0, self.status_var.set, "Doctor completed")
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _save_report(self) -> None:
         results = [item.analysis for item in self.items.values() if item.analysis]
         if not results:
-            messagebox.showinfo("DVD FieldFix", "Analise primeiro os ficheiros.")
+            messagebox.showinfo("DVD FieldFix", "Analyze the files first.")
             return
         destination = filedialog.asksaveasfilename(
             defaultextension=".json", filetypes=[("JSON", "*.json")], initialfile="fieldfix-report.json"
         )
         if destination:
             write_analysis_report(destination, results)  # type: ignore[arg-type]
-            self.status_var.set(f"Relatório guardado em {destination}")
+            self.status_var.set(f"Report saved to {destination}")
 
     def _open_output(self) -> None:
         selected = self._selected_items(require_one=True)
@@ -399,7 +399,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         else:
             return
         if not directory.exists():
-            messagebox.showinfo("DVD FieldFix", "A pasta de destino ainda não existe.")
+            messagebox.showinfo("DVD FieldFix", "The output folder does not exist yet.")
             return
         if os.name == "nt":
             os.startfile(directory)  # type: ignore[attr-defined]
@@ -408,7 +408,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
 
     def _run_worker(self, target: object) -> None:
         if self.worker and self.worker.is_alive():
-            messagebox.showinfo("DVD FieldFix", "Já existe uma operação em curso.")
+            messagebox.showinfo("DVD FieldFix", "Another operation is already running.")
             return
         self.cancel_event.clear()
         self._busy(True)
@@ -420,12 +420,12 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
                 self.after(0, self.status_var.set, str(exc))
             except (FieldFixError, ValueError) as exc:
                 self.after(0, messagebox.showerror, "DVD FieldFix", str(exc))
-                self.after(0, self.status_var.set, "Operação terminou com erro")
+                self.after(0, self.status_var.set, "Operation failed")
             except Exception as exc:  # defensive boundary for GUI callbacks
-                self.after(0, messagebox.showerror, "Erro inesperado", repr(exc))
-                self.after(0, self.status_var.set, "Erro inesperado")
+                self.after(0, messagebox.showerror, "Unexpected error", repr(exc))
+                self.after(0, self.status_var.set, "Unexpected error")
             else:
-                self.after(0, self.status_var.set, "Operação concluída")
+                self.after(0, self.status_var.set, "Operation completed")
                 self.after(0, self.progress.configure, {"value": 100})
             finally:
                 self.after(0, self._busy, False)
@@ -443,7 +443,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         classification = item.analysis.classification.value if item.analysis else "—"
         confidence = f"{item.analysis.confidence:.0%}" if item.analysis else "—"
         action = item.override.value
-        crop = item.analysis.crop_suggestion if item.analysis and item.analysis.crop_suggestion else "nenhum"
+        crop = item.analysis.crop_suggestion if item.analysis and item.analysis.crop_suggestion else "none"
         if item.override == ProcessingMode.AUTO and item.analysis and item.analysis.suggested_mode:
             action = item.analysis.suggested_mode.value
         self.tree.item(
@@ -464,7 +464,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
 
     def _cancel(self) -> None:
         self.cancel_event.set()
-        self.status_var.set("A cancelar…")
+        self.status_var.set("Cancelling…")
 
     def _close(self) -> None:
         self.cancel_event.set()

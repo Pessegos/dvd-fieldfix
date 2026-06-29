@@ -161,9 +161,9 @@ class CropMargins:
         try:
             numbers = [int(part.strip()) for part in value.split(":")]
         except ValueError as exc:
-            raise ValueError("crop deve usar o formato esquerda:topo:direita:fundo") from exc
+            raise ValueError("crop must use the left:top:right:bottom format") from exc
         if len(numbers) != 4 or any(number < 0 or number % 2 for number in numbers):
-            raise ValueError("as quatro margens de crop têm de ser pares e não negativas")
+            raise ValueError("all four crop margins must be even and non-negative")
         return cls(*numbers)
 
 

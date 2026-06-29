@@ -6,98 +6,119 @@
 
 > Intelligent field reconstruction, hybrid deinterlacing and archival encoding for DVD sources.
 
-DVD FieldFix analisa MKVs provenientes de DVD e aplica o tratamento menos destrutivo possível:
+DVD FieldFix analyzes MKV files sourced from DVDs and applies the least destructive treatment possible:
 
-- vídeo progressivo é copiado byte a byte;
-- PAL 2:2 ou NTSC 3:2 recuperável usa `fieldmatch` e deinterlace condicional apenas nos frames residuais isolados;
-- PAL híbrido usa VFM para o corpo 25p, duplica esses frames sem interpolação e usa QTGMC apenas nos segmentos 50i, produzindo 50p;
-- vídeo realmente entrelaçado usa VapourSynth/QTGMC a 50p ou 59,94p;
-- NTSC híbrido ou resultados contraditórios param para revisão em vez de arriscar uma cadência errada;
-- a GUI usa tema escuro e disponibiliza auto-crop conservador, desligado por defeito.
+- progressive video is copied byte for byte;
+- recoverable PAL 2:2 or NTSC 3:2 uses field matching, with conditional deinterlacing for isolated residual frames;
+- hybrid PAL uses VFM for the 25p body and QTGMC for confirmed 50i segments, producing progressive 50p;
+- true interlaced video uses VapourSynth/QTGMC at 50p or 59.94p;
+- hybrid NTSC and contradictory results stop for manual review rather than risk an incorrect cadence;
+- the dark-mode GUI provides drag-and-drop, preview, queue management and conservative opt-in auto-crop.
 
-Os originais nunca são substituídos. Por defeito, as saídas ficam numa subpasta `_fixed`, são escritas primeiro como `.partial.mkv` e só recebem o nome final após validação integral.
+Original files are never overwritten. Outputs are written to a `_fixed` subfolder by default, created as `.partial.mkv`, fully validated, and only then renamed atomically.
 
 ## Download
 
-A versão Windows pronta a executar, acompanhada por checksum SHA-256, está disponível em [GitHub Releases](https://github.com/Pessegos/dvd-fieldfix/releases/latest). Depois de extrair o ZIP, execute `setup_qtgmc.ps1` uma vez para instalar o runtime VapourSynth/QTGMC portátil e isolado.
+Download the ready-to-run Windows package and its SHA-256 checksum from [GitHub Releases](https://github.com/Pessegos/dvd-fieldfix/releases/latest).
 
-## Instalação para desenvolvimento
+Requirements:
 
-Requisitos: Windows, Python 3.10+ e FFmpeg/FFprobe no `PATH`.
+- Windows 10 or later;
+- FFmpeg and FFprobe available on `PATH`;
+- the portable VapourSynth/QTGMC runtime installed once by running `setup_qtgmc.ps1` from the extracted release folder.
+
+Run `DVD-FieldFix.exe` for the GUI or `DVD-FieldFix-CLI.exe doctor` to verify the complete toolchain.
+
+## Development setup
+
+The source build requires Windows, Python 3.10+ and FFmpeg/FFprobe on `PATH`.
 
 ```powershell
 python -m pip install -e ".[gui,dev]"
 dvd-fieldfix doctor
 ```
 
-Para instalar VapourSynth R76 + QTGMC num Python 3.12 portátil e isolado:
+Install VapourSynth R76 and QTGMC into an isolated portable Python 3.12 environment:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup_qtgmc.ps1
 dvd-fieldfix doctor
 ```
 
-O setup valida o SHA-256 do bootstrap oficial e guarda o ambiente em `.runtime/vapoursynth-portable`. Não modifica o Python do sistema.
+The setup script verifies the official bootstrap SHA-256 and stores the environment under `.runtime/vapoursynth-portable`. It does not modify the system Python installation.
 
-## Utilização
+## Usage
 
-Abrir a GUI:
+Open the GUI:
 
 ```powershell
 dvd-fieldfix gui
 ```
 
-Analisar uma pasta:
+Analyze a folder:
 
 ```powershell
-dvd-fieldfix analyze "C:\videos" --report relatorio.json
+dvd-fieldfix analyze "C:\videos" --report report.json
 ```
 
-Processar automaticamente para H.264:
+Process automatically using H.264:
 
 ```powershell
 dvd-fieldfix process "C:\videos" --codec h264
 ```
 
-Outros exemplos:
+More examples:
 
 ```powershell
-dvd-fieldfix process episodio.mkv --codec hevc10 --mode fieldmatch
-dvd-fieldfix process episodio.mkv --codec hevc10 --mode hybrid50
-dvd-fieldfix process episodio.mkv --codec ffv1 --mode qtgmc
-dvd-fieldfix process episodio.mkv --crop 8:0:8:0 --denoise light
-dvd-fieldfix process episodio.mkv --auto-crop
+dvd-fieldfix process episode.mkv --codec hevc10 --mode fieldmatch
+dvd-fieldfix process episode.mkv --codec hevc10 --mode hybrid50
+dvd-fieldfix process episode.mkv --codec ffv1 --mode qtgmc
+dvd-fieldfix process episode.mkv --crop 8:0:8:0 --denoise light
+dvd-fieldfix process episode.mkv --auto-crop
 ```
 
-O auto-crop mede sete zonas distribuídas pelo episódio e remove apenas margens que todas as amostras consideram exteriores à imagem. Um crop manual `L:T:R:B` tem sempre prioridade.
+Auto-crop samples seven positions across the episode and removes only borders that every valid sample considers outside the active image. It is disabled by default. A manual `L:T:R:B` crop always takes priority.
 
-Perfis de vídeo:
+## Video profiles
 
-- `h264`: x264 CRF 16, preset veryslow, 8-bit;
-- `hevc10`: x265 CRF 18, preset veryslow, 10-bit;
-- `ffv1`: FFV1 level 3 lossless.
+- `h264`: x264 CRF 16, `veryslow`, High profile, 8-bit `yuv420p`;
+- `hevc10`: x265 CRF 18, `veryslow`, 10-bit `yuv420p10le`;
+- `ffv1`: lossless FFV1 level 3.
 
-Áudio, legendas, capítulos, anexos, idiomas e disposições são copiados sem recodificação.
+Audio, subtitles, chapters, attachments, languages and dispositions are copied without re-encoding.
 
-## Pipeline temporal
+## Temporal pipeline
 
-O residual depois de field matching é medido em janelas de um segundo. Janelas com atividade 50i estável são unidas, recebem 0,5 s de margem e ficam registadas no relatório. No modo `hybrid50`:
+Residual combing after field matching is measured in one-second windows. Windows with stable 50i activity are merged, padded by 0.5 seconds for safe temporal transitions, and recorded in the JSON report.
 
-- VFM recupera os frames 25p com a mesma ordem de campo usada pelo QTGMC;
-- `Interleave` duplica cada frame 25p exatamente, sem criar movimento artificial;
-- QTGMC com source matching conservador substitui os segmentos 50i e frames ainda marcados como combed;
-- a saída é CFR 50p progressiva e mantém a duração, o áudio e o DAR da origem.
+In `hybrid50` mode:
 
-O programa analisa integralmente cada ficheiro; nenhuma lista de episódios está codificada no código. O `pipeline_version` faz com que saídas antigas nunca sejam reutilizadas como se tivessem sido produzidas pelo algoritmo atual.
+- VFM recovers 25p frames using the same reference field as QTGMC;
+- `Interleave` duplicates each clean 25p frame exactly, without motion interpolation;
+- QTGMC with conservative source matching replaces confirmed 50i ranges and any frame still marked as combed;
+- the result is progressive CFR 50p with the source duration and display aspect ratio preserved.
 
-## Saídas e manifestos
+Every file is analyzed in full. No episode list or source-specific decision is hard-coded.
 
-Cada MKV concluído recebe um manifesto adjacente `ficheiro.mkv.dvd-fieldfix.json` com SHA-256 da origem/saída, versão do pipeline, configuração, análise e validação. A validação confirma descodificação integral, streams, duração, frame rate, progressividade, combing residual e DAR/SAR. Uma saída já validada com a mesma origem, versão e configuração é ignorada; colisões diferentes ficam bloqueadas.
+## Safety, manifests and validation
 
-## Build dos executáveis
+Each completed MKV receives an adjacent `filename.mkv.dvd-fieldfix.json` manifest containing source/output SHA-256 hashes, the pipeline version, configuration, analysis and validation results.
+
+Validation checks:
+
+- full decoding without errors;
+- duration within 100 ms;
+- audio, subtitle and attachment stream counts;
+- expected frame rate and progressive field flag;
+- residual combing;
+- SAR/DAR preservation.
+
+A completed output is skipped only when its source hash, pipeline version, configuration and output hash all match. Incompatible collisions are blocked.
+
+## Building the executables
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
 ```
 
-São criados uma aplicação gráfica `DVD-FieldFix.exe` e um executável de consola `DVD-FieldFix-CLI.exe` em `dist/DVD-FieldFix`.
+The build creates `DVD-FieldFix.exe` and `DVD-FieldFix-CLI.exe` under `dist/DVD-FieldFix`. Tagged GitHub builds package this folder as a ZIP and publish a matching SHA-256 file.

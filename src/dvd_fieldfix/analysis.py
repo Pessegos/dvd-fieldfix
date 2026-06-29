@@ -73,7 +73,7 @@ def collect_inputs(values: Iterable[str | os.PathLike[str]], recursive: bool = F
             iterator = path.rglob("*.mkv") if recursive else path.glob("*.mkv")
             found.extend(item.resolve() for item in iterator if "_fixed" not in item.parts)
         elif not path.exists():
-            raise AnalysisError(f"O caminho não existe: {path}")
+            raise AnalysisError(f"Path does not exist: {path}")
     return sorted(dict.fromkeys(found), key=lambda item: str(item).casefold())
 
 
@@ -101,11 +101,11 @@ def probe_media(path: str | os.PathLike[str], tools: Toolchain) -> MediaInfo:
         **popen_kwargs(),
     )
     if completed.returncode:
-        raise AnalysisError(completed.stderr.strip() or f"ffprobe falhou para {path}")
+        raise AnalysisError(completed.stderr.strip() or f"ffprobe failed for {path}")
     try:
         document = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise AnalysisError(f"Resposta inválida do ffprobe para {path}") from exc
+        raise AnalysisError(f"Invalid ffprobe response for {path}") from exc
     streams: list[StreamInfo] = []
     for raw in document.get("streams", []):
         streams.append(
@@ -207,13 +207,13 @@ def scan_idet(
                 last_lines.pop(0)
             if cancel_event and cancel_event.is_set():
                 terminate_process_tree(process)
-                raise CancelledError("Análise cancelada")
+                raise CancelledError("Analysis cancelled")
             frame_match = METADATA_FRAME_RE.search(line)
             if frame_match:
                 current_time = float(frame_match.group(2))
                 frame_number = int(frame_match.group(1))
                 if progress and frame_number % 250 == 0:
-                    progress(min(0.98, frame_number / expected_frames), "A medir campos")
+                    progress(min(0.98, frame_number / expected_frames), "Measuring fields")
                 continue
             class_match = METADATA_CLASS_RE.search(line)
             if class_match and current_time is not None:
@@ -231,9 +231,9 @@ def scan_idet(
         if process.poll() is None:
             process.wait()
     if process.returncode:
-        raise AnalysisError("IDet falhou:\n" + "\n".join(last_lines[-15:]))
+        raise AnalysisError("IDet failed:\n" + "\n".join(last_lines[-15:]))
     if progress:
-        progress(1.0, "IDet concluído")
+        progress(1.0, "IDet completed")
     return stats, _segments_from_bins(bins, media.duration)
 
 
@@ -322,14 +322,14 @@ def scan_fieldmatch_residual(
         if cancel_event and cancel_event.is_set():
             terminate_process_tree(process)
             thread.join(timeout=2)
-            raise CancelledError("Análise cancelada")
+            raise CancelledError("Analysis cancelled")
         value = parse_ffmpeg_progress_line(line, media.duration)
         if value is not None and progress:
-            progress(value, "A testar reconstrução de campos")
+            progress(value, "Testing field reconstruction")
     returncode = process.wait()
     thread.join(timeout=5)
     if returncode:
-        raise AnalysisError("Field matching falhou:\n" + "\n".join(error_lines[-15:]))
+        raise AnalysisError("Field matching failed:\n" + "\n".join(error_lines[-15:]))
     fps = parse_rate(media.video.average_frame_rate) if media.video else None
     total = max(1, round(media.duration * (fps or 25.0)))
     segments = _residual_segments(residual_bins, fps or 25.0, media.duration)
@@ -502,12 +502,12 @@ def analyze_file(
     media = probe_media(path, tools)
     video = media.video
     if not video or not video.width or not video.height:
-        return AnalysisResult(media, Classification.UNSUPPORTED, 1.0, "O ficheiro não contém vídeo suportado")
+        return AnalysisResult(media, Classification.UNSUPPORTED, 1.0, "The file does not contain supported video")
     fps = parse_rate(video.average_frame_rate) or parse_rate(video.real_frame_rate)
     if not fps:
-        return AnalysisResult(media, Classification.UNSUPPORTED, 1.0, "Não foi possível determinar o frame rate")
+        return AnalysisResult(media, Classification.UNSUPPORTED, 1.0, "Could not determine the frame rate")
     if progress:
-        progress(0.0, "A analisar IDet")
+        progress(0.0, "Analyzing with IDet")
     idet, segments = scan_idet(media, tools, cancel_event=cancel_event, progress=progress)
     crop = detect_crop(media, tools)
     base = dict(
@@ -522,7 +522,7 @@ def analyze_file(
         return AnalysisResult(
             classification=Classification.PROGRESSIVE,
             confidence=max(0.90, 1.0 - idet.interlaced_percent / 10),
-            reason=f"IDet encontrou apenas {idet.interlaced_percent:.3f}% de frames entrelaçados",
+            reason=f"IDet found only {idet.interlaced_percent:.3f}% interlaced frames",
             cadence="progressive",
             suggested_output_fps=_rate_label(fps),
             suggested_mode=ProcessingMode.COPY,
@@ -533,21 +533,21 @@ def analyze_file(
         return AnalysisResult(
             classification=Classification.AMBIGUOUS,
             confidence=0.25,
-            reason="Há combing, mas a ordem dos campos não é conclusiva",
+            reason="Combing is present, but the field order is inconclusive",
             suggested_mode=None,
-            warnings=["Escolha TFF ou BFF manualmente após pré-visualização."],
+            warnings=["Choose TFF or BFF manually after previewing the result."],
             **base,
         )
     if idet.field_order_consistency and idet.field_order_consistency < 0.85:
         return AnalysisResult(
             classification=Classification.AMBIGUOUS,
             confidence=0.35,
-            reason=f"A ordem dos campos só é consistente em {idet.field_order_consistency:.1%} dos frames",
+            reason=f"Field order is consistent in only {idet.field_order_consistency:.1%} of frames",
             suggested_mode=None,
             **base,
         )
     if progress:
-        progress(0.0, "A testar field matching")
+        progress(0.0, "Testing field matching")
     residual_frames, residual_percent, residual_segments = scan_fieldmatch_residual(
         media,
         tools,
@@ -568,8 +568,8 @@ def analyze_file(
             classification=Classification.HYBRID,
             confidence=max(0.90, min(0.99, 0.94 + hybrid_duration / max(media.duration, 1.0) / 4)),
             reason=(
-                f"O field matching recupera o corpo a 25p, mas há {hybrid_duration:.1f}s "
-                "de segmentos 50i estáveis; preservar a timeline a 50p"
+                f"Field matching recovers the 25p body, but {hybrid_duration:.1f}s "
+                "of stable 50i segments remain; preserve the timeline at 50p"
             ),
             cadence="hybrid-2:2/50i",
             suggested_output_fps="50/1",
@@ -581,8 +581,8 @@ def analyze_file(
             classification=Classification.FIELD_MATCHABLE,
             confidence=max(0.88, 0.99 - residual_percent / 100),
             reason=(
-                f"O field matching recupera o 25p; {residual_percent:.3f}% usa "
-                "deinterlace condicional"
+                f"Field matching recovers 25p; {residual_percent:.3f}% uses "
+                "conditional deinterlacing"
             ),
             cadence="2:2",
             suggested_output_fps="25/1",
@@ -598,7 +598,7 @@ def analyze_file(
         return AnalysisResult(
             classification=Classification.FIELD_MATCHABLE,
             confidence=0.92,
-            reason="Cadência NTSC 3:2 estável e field matching com pouco combing residual",
+            reason="Stable NTSC 3:2 cadence with little residual combing after field matching",
             cadence="3:2",
             suggested_output_fps="24000/1001",
             suggested_mode=ProcessingMode.FIELDMATCH,
@@ -609,7 +609,7 @@ def analyze_file(
         return AnalysisResult(
             classification=Classification.TRUE_INTERLACED,
             confidence=min(0.99, 0.80 + residual_percent / 500),
-            reason=f"{residual_percent:.2f}% continua combed após field matching; tratar como vídeo real entrelaçado",
+            reason=f"{residual_percent:.2f}% remains combed after field matching; treat as true interlaced video",
             cadence="field-rate",
             suggested_output_fps=output_fps,
             suggested_mode=ProcessingMode.QTGMC,
@@ -619,14 +619,14 @@ def analyze_file(
     if ntsc:
         if residual_segments:
             warnings.append(
-                "Material NTSC híbrido: parar para revisão em vez de destruir uma cadência 3:2/59,94i incerta."
+                "Hybrid NTSC material: stop for review rather than damage an uncertain 3:2/59.94i cadence."
             )
         else:
-            warnings.append("Material NTSC sem padrão 3:2 suficientemente estável.")
+            warnings.append("NTSC material without a sufficiently stable 3:2 pattern.")
     return AnalysisResult(
         classification=Classification.AMBIGUOUS,
         confidence=0.45,
-        reason=f"Residual de {residual_percent:.2f}% fica entre os limites seguros de field match e QTGMC",
+        reason=f"A {residual_percent:.2f}% residual falls between the safe field-match and QTGMC thresholds",
         cadence="unknown",
         suggested_output_fps=None,
         suggested_mode=None,

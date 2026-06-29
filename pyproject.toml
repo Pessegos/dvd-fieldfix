@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dvd-fieldfix"
 version = "0.1.0"
-description = "Detecao e correcao conservadora de video entrelacado proveniente de DVD"
+description = "Intelligent field reconstruction and deinterlacing for DVD-sourced video"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -31,4 +31,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-

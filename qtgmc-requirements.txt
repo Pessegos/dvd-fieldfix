@@ -1,5 +1,4 @@
-# Ambiente isolado criado por setup_qtgmc.ps1.
-# O extra deinterlace inclui BestSource, MVTools e os plugins usados por QTempGaussMC.
+# Isolated environment created by setup_qtgmc.ps1.
+# The deinterlace extra includes BestSource, MVTools and the plugins used by QTempGaussMC.
 vapoursynth==76
 vsjetpack[deinterlace]==2.0.0
-

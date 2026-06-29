@@ -60,9 +60,9 @@ def resolve_mode(analysis: AnalysisResult, requested: ProcessingMode) -> Process
         return ProcessingMode.QTGMC
     if analysis.classification == Classification.AMBIGUOUS:
         raise AmbiguousSourceError(
-            f"{Path(analysis.media.path).name}: análise ambígua; escolha fieldmatch, hybrid50 ou QTGMC manualmente"
+            f"{Path(analysis.media.path).name}: ambiguous analysis; choose fieldmatch, hybrid50 or QTGMC manually"
         )
-    raise ProcessingError(f"Fonte não suportada: {analysis.reason}")
+    raise ProcessingError(f"Unsupported source: {analysis.reason}")
 
 
 def codec_arguments(profile: CodecProfile) -> list[str]:
@@ -107,7 +107,7 @@ def codec_arguments(profile: CodecProfile) -> list[str]:
             "-pix_fmt",
             "yuv420p",
         ]
-    raise ProcessingError(f"Perfil desconhecido: {profile}")
+    raise ProcessingError(f"Unknown profile: {profile}")
 
 
 def fieldmatch_filter(analysis: AnalysisResult, config: JobConfig) -> str:
@@ -129,11 +129,11 @@ def restoration_filters(analysis: AnalysisResult, config: JobConfig) -> list[str
     video = analysis.media.video
     if crop.enabled:
         if not video or not video.width or not video.height:
-            raise ProcessingError("Não é possível aplicar crop sem dimensões conhecidas")
+            raise ProcessingError("Crop cannot be applied without known dimensions")
         new_width = video.width - crop.left - crop.right
         new_height = video.height - crop.top - crop.bottom
         if new_width <= 0 or new_height <= 0 or new_width % 2 or new_height % 2:
-            raise ProcessingError("O crop resulta em dimensões inválidas; use margens pares menores")
+            raise ProcessingError("The crop produces invalid dimensions; use smaller even margins")
         filters.append(
             f"crop=iw-{crop.left + crop.right}:ih-{crop.top + crop.bottom}:{crop.left}:{crop.top}"
         )
@@ -253,7 +253,7 @@ def process_file(
         doctor = tools.doctor(deep_qtgmc=True)
         failed = [check.detail for check in doctor.checks if check.name == "QTGMC" and not check.ok]
         if failed:
-            raise DependencyError("QTGMC indisponível: " + failed[0])
+            raise DependencyError("QTGMC unavailable: " + failed[0])
     source = Path(analysis.media.path)
     output_directory = Path(config.output_directory).expanduser().resolve() if config.output_directory else source.parent / "_fixed"
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -265,7 +265,7 @@ def process_file(
         return existing
     if output.exists() and not config.replace_output:
         raise OutputCollisionError(
-            f"Já existe uma saída incompatível: {output}. Escolha outro destino ou use --replace-output."
+            f"An incompatible output already exists: {output}. Choose another destination or use --replace-output."
         )
     token = uuid.uuid4().hex[:12]
     partial = output_directory / f".{source.stem}.{token}.partial.mkv"
@@ -273,12 +273,12 @@ def process_file(
     work.mkdir(parents=True, exist_ok=False)
     try:
         if progress:
-            progress(0.0, "A preparar saída")
+            progress(0.0, "Preparing output")
         if mode == ProcessingMode.COPY:
             shutil.copy2(source, partial)
             copied_hash = sha256_file(partial)
             if copied_hash != source_hash:
-                raise ProcessingError("A cópia byte a byte falhou a verificação SHA-256")
+                raise ProcessingError("The byte-for-byte copy failed SHA-256 verification")
             validation = ValidationResult(
                 valid=True,
                 decoded_without_errors=True,
@@ -290,7 +290,7 @@ def process_file(
                 expected_dar=_display_aspect_ratio(analysis.media),
                 output_dar=_display_aspect_ratio(analysis.media),
                 aspect_ratio_valid=True,
-                messages=["Cópia byte a byte confirmada por SHA-256"],
+                messages=["Byte-for-byte copy confirmed by SHA-256"],
             )
             action = "copy"
         elif mode == ProcessingMode.FIELDMATCH:
@@ -312,9 +312,9 @@ def process_file(
             )
             action = "qtgmc"
         else:
-            raise ProcessingError(f"Modo não implementado: {mode}")
+            raise ProcessingError(f"Mode not implemented: {mode}")
         if not validation.valid:
-            raise ProcessingError("A saída falhou a validação: " + "; ".join(validation.messages))
+            raise ProcessingError("Output validation failed: " + "; ".join(validation.messages))
         output_hash = sha256_file(partial)
         if output.exists():
             output.unlink()
@@ -334,7 +334,7 @@ def process_file(
         }
         json_dump_atomic(manifest, document)
         if progress:
-            progress(1.0, "Concluído")
+            progress(1.0, "Completed")
         return ProcessingResult(
             source=str(source),
             output=str(output),
@@ -475,15 +475,15 @@ def _encode_hybrid(
     fps = analysis.input_fps or 0.0
     if not math.isclose(fps, 25.0, abs_tol=0.08):
         raise ProcessingError(
-            "O modo hybrid50 automático suporta PAL 25/50 neste momento; "
-            "NTSC híbrido fica bloqueado para revisão de cadência."
+            "Automatic hybrid50 currently supports PAL 25/50; "
+            "hybrid NTSC is blocked for cadence review."
         )
     script = work / "hybrid50.vpy"
     cache = work / "bestsource.bsindex"
     tff = (analysis.field_order or "tff") == "tff"
     ranges = _hybrid_frame_ranges(analysis)
     if not ranges:
-        raise ProcessingError("O modo hybrid50 requer pelo menos um segmento 50i confirmado")
+        raise ProcessingError("hybrid50 requires at least one confirmed 50i segment")
     script.write_text(
         _hybrid_script(analysis.media.path, cache, tff, fps, ranges),
         encoding="utf-8",
@@ -659,14 +659,14 @@ def _run_ffmpeg_progress(
         if cancel_event and cancel_event.is_set():
             terminate_process_tree(process)
             thread.join(timeout=2)
-            raise CancelledError("Codificação cancelada")
+            raise CancelledError("Encoding cancelled")
         value = parse_ffmpeg_progress_line(line, duration)
         if value is not None and progress:
-            progress(value * 0.82, "A codificar vídeo")
+            progress(value * 0.82, "Encoding video")
     returncode = process.wait()
     thread.join(timeout=5)
     if returncode:
-        raise ProcessingError("FFmpeg falhou:\n" + "\n".join(errors[-30:]))
+        raise ProcessingError("FFmpeg failed:\n" + "\n".join(errors[-30:]))
 
 
 def _run_pipeline_progress(
@@ -709,17 +709,17 @@ def _run_pipeline_progress(
         if cancel_event and cancel_event.is_set():
             terminate_process_tree(consumer)
             terminate_process_tree(producer)
-            raise CancelledError("Codificação QTGMC cancelada")
+            raise CancelledError("QTGMC encoding cancelled")
         value = parse_ffmpeg_progress_line(line, duration)
         if value is not None and progress:
-            progress(value * 0.82, "QTGMC e codificação")
+            progress(value * 0.82, "QTGMC and encoding")
     consumer_return = consumer.wait()
     producer_return = producer.wait()
     producer_thread.join(timeout=5)
     consumer_thread.join(timeout=5)
     if producer_return or consumer_return:
         messages = producer_errors[-20:] + consumer_errors[-30:]
-        raise ProcessingError("Pipeline QTGMC falhou:\n" + "\n".join(messages))
+        raise ProcessingError("QTGMC pipeline failed:\n" + "\n".join(messages))
 
 
 def _drain_binary_lines(stream: object, collector: list[str]) -> None:
@@ -744,7 +744,7 @@ def validate_output(
     assert tools.ffmpeg
     result = ValidationResult(valid=False)
     if progress:
-        progress(0.83, "A validar estrutura")
+        progress(0.83, "Validating structure")
     output_media = probe_media(path, tools)
     result.expected_fps = _expected_output_fps(analysis, mode)
     output_video = output_media.video
@@ -761,7 +761,7 @@ def validate_output(
     )
     if not result.frame_rate_valid:
         result.messages.append(
-            f"Frame rate inesperado: {result.output_fps!r}, esperado {result.expected_fps!r}"
+            f"Unexpected frame rate: {result.output_fps!r}; expected {result.expected_fps!r}"
         )
     result.expected_dar = _display_aspect_ratio(analysis.media)
     result.output_dar = _display_aspect_ratio(output_media)
@@ -775,17 +775,17 @@ def validate_output(
         )
     if not result.aspect_ratio_valid:
         result.messages.append(
-            f"Display aspect ratio inesperado: {result.output_dar!r}, esperado {result.expected_dar!r}"
+            f"Unexpected display aspect ratio: {result.output_dar!r}; expected {result.expected_dar!r}"
         )
     result.duration_delta = abs(output_media.duration - analysis.media.duration)
     if result.duration_delta > 0.100:
-        result.messages.append(f"Duração difere {result.duration_delta:.3f}s")
+        result.messages.append(f"Duration differs by {result.duration_delta:.3f}s")
     stream_types = ("audio", "subtitle", "attachment")
     result.streams_preserved = all(
         output_media.count_streams(kind) == analysis.media.count_streams(kind) for kind in stream_types
     )
     if not result.streams_preserved:
-        result.messages.append("A contagem de áudio/legendas/anexos não foi preservada")
+        result.messages.append("Audio/subtitle/attachment stream counts were not preserved")
     decode_command = [
         tools.ffmpeg,
         "-v",
@@ -812,13 +812,13 @@ def validate_output(
     while process.poll() is None:
         if cancel_event and cancel_event.wait(0.2):
             terminate_process_tree(process)
-            raise CancelledError("Validação cancelada")
+            raise CancelledError("Validation cancelled")
     errors = process.stderr.read().strip() if process.stderr else ""
     result.decoded_without_errors = process.returncode == 0 and not errors
     if not result.decoded_without_errors:
-        result.messages.append("A descodificação integral encontrou erros: " + errors[-500:])
+        result.messages.append("Full decoding found errors: " + errors[-500:])
     if progress:
-        progress(0.90, "A confirmar ausência de combing")
+        progress(0.90, "Checking for residual combing")
     residual_frames, residual_percent, _ = scan_fieldmatch_residual(
         output_media,
         tools,
@@ -829,8 +829,8 @@ def validate_output(
     result.progressive_output = residual_percent <= 1.0 and field_flag in {"progressive", "unknown", None}
     if not result.progressive_output:
         result.messages.append(
-            f"A saída tem {residual_percent:.3f}% de combing residual "
-            f"({residual_frames} frames) ou field_order={field_flag}"
+            f"Output has {residual_percent:.3f}% residual combing "
+            f"({residual_frames} frames) or field_order={field_flag}"
         )
     result.valid = (
         result.duration_delta <= 0.100
@@ -841,9 +841,9 @@ def validate_output(
         and result.aspect_ratio_valid
     )
     if result.valid:
-        result.messages.append("Duração, streams, descodificação e progressividade validadas")
+        result.messages.append("Duration, streams, decoding, frame rate, aspect ratio and progressiveness validated")
     if progress:
-        progress(0.98, "Validação concluída")
+        progress(0.98, "Validation completed")
     return result
 
 

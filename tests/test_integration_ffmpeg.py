@@ -12,7 +12,7 @@ from dvd_fieldfix.processing import process_file
 from dvd_fieldfix.tools import Toolchain, sha256_file
 
 
-pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg não instalado")
+pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is not installed")
 
 
 def make_progressive_mkv(path: Path) -> None:
@@ -47,7 +47,7 @@ def make_progressive_mkv(path: Path) -> None:
 
 
 def test_analyze_and_copy_progressive(tmp_path: Path) -> None:
-    source = tmp_path / "episódio d'Árvore.mkv"
+    source = tmp_path / "episode O'Connor – Tree.mkv"
     make_progressive_mkv(source)
     tools = Toolchain.discover()
     result = analyze_file(source, tools)
@@ -55,7 +55,7 @@ def test_analyze_and_copy_progressive(tmp_path: Path) -> None:
     assert result.classification != Classification.UNSUPPORTED
     result.classification = Classification.PROGRESSIVE
     result.suggested_mode = ProcessingMode.COPY
-    output_dir = tmp_path / "resultados"
+    output_dir = tmp_path / "outputs"
     processed = process_file(
         result,
         JobConfig(codec=CodecProfile.H264, mode=ProcessingMode.COPY, output_directory=str(output_dir)),

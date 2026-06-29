@@ -123,21 +123,21 @@ class Toolchain:
     def require_analysis(self) -> None:
         missing = [name for name, value in (("ffmpeg", self.ffmpeg), ("ffprobe", self.ffprobe)) if not value]
         if missing:
-            raise DependencyError(f"Dependências em falta: {', '.join(missing)}")
+            raise DependencyError(f"Missing dependencies: {', '.join(missing)}")
 
     def require_qtgmc(self) -> None:
         if not self.vspipe:
             raise DependencyError(
-                "VapourSynth/QTGMC não está instalado. Execute setup_qtgmc.ps1 e volte a correr doctor."
+                "VapourSynth/QTGMC is not installed. Run setup_qtgmc.ps1, then run doctor again."
             )
 
     def doctor(self, deep_qtgmc: bool = True) -> DoctorReport:
         report = DoctorReport()
         report.checks.append(
-            DoctorCheck("ffmpeg", bool(self.ffmpeg), self.ffmpeg or "não encontrado", True, True)
+            DoctorCheck("ffmpeg", bool(self.ffmpeg), self.ffmpeg or "not found", True, True)
         )
         report.checks.append(
-            DoctorCheck("ffprobe", bool(self.ffprobe), self.ffprobe or "não encontrado", True, True)
+            DoctorCheck("ffprobe", bool(self.ffprobe), self.ffprobe or "not found", True, True)
         )
         if self.ffmpeg:
             filters = run_capture([self.ffmpeg, "-hide_banner", "-filters"], check=False).stdout
@@ -145,9 +145,9 @@ class Toolchain:
             absent = [item for item in required_filters if item not in filters]
             report.checks.append(
                 DoctorCheck(
-                    "filtros FFmpeg",
+                    "FFmpeg filters",
                     not absent,
-                    "disponíveis" if not absent else f"em falta: {', '.join(absent)}",
+                    "available" if not absent else f"missing: {', '.join(absent)}",
                     True,
                     True,
                 )
@@ -159,7 +159,7 @@ class Toolchain:
                 DoctorCheck(
                     "encoders",
                     not absent,
-                    "libx264, libx265 e FFV1" if not absent else f"em falta: {', '.join(absent)}",
+                    "libx264, libx265 and FFV1" if not absent else f"missing: {', '.join(absent)}",
                     False,
                     True,
                 )
@@ -168,7 +168,7 @@ class Toolchain:
             DoctorCheck(
                 "vspipe",
                 bool(self.vspipe),
-                self.vspipe or "não encontrado; execute setup_qtgmc.ps1",
+                self.vspipe or "not found; run setup_qtgmc.ps1",
                 False,
                 True,
             )
@@ -209,9 +209,9 @@ hybrid.set_output()
             result = run_capture([self.vspipe, str(path), "--"], check=False, timeout=120)
         combined = (result.stdout + "\n" + result.stderr).strip()
         if result.returncode == 0:
-            return True, "QTempGaussMC, VFM e pipeline híbrido 50p carregados"
+            return True, "QTempGaussMC, VFM and the hybrid 50p pipeline loaded"
         tail = "\n".join(combined.splitlines()[-5:])
-        return False, tail or f"vspipe terminou com código {result.returncode}"
+        return False, tail or f"vspipe exited with code {result.returncode}"
 
 
 @dataclass(slots=True)
@@ -252,7 +252,7 @@ def run_capture(
     result = CaptureResult(command, completed.returncode, completed.stdout, completed.stderr)
     if check and completed.returncode:
         tail = "\n".join(completed.stderr.splitlines()[-20:])
-        raise FieldFixError(f"Comando falhou ({completed.returncode}): {' '.join(command)}\n{tail}")
+        raise FieldFixError(f"Command failed ({completed.returncode}): {' '.join(command)}\n{tail}")
     return result
 
 
@@ -329,7 +329,7 @@ def wait_with_cancel(
     while process.poll() is None:
         if cancel_event and cancel_event.wait(poll_interval):
             terminate_process_tree(process)
-            raise CancelledError("Operação cancelada")
+            raise CancelledError("Operation cancelled")
         if not cancel_event:
             threading.Event().wait(poll_interval)
     return int(process.returncode or 0)

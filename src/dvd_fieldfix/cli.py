@@ -25,49 +25,49 @@ EXIT_CANCELLED = 4
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dvd-fieldfix",
-        description="Deteta e corrige entrelaçamento em rips de DVD sem alterar os originais.",
+        description="Detect and correct interlacing in DVD rips without modifying the originals.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
-    doctor = subparsers.add_parser("doctor", help="Validar FFmpeg, encoders e QTGMC/VFM híbrido")
-    doctor.add_argument("--quick", action="store_true", help="Não executar o teste de frames QTGMC/VFM")
+    doctor = subparsers.add_parser("doctor", help="Check FFmpeg, encoders, QTGMC and hybrid VFM")
+    doctor.add_argument("--quick", action="store_true", help="Skip the QTGMC/VFM frame test")
 
-    analyze = subparsers.add_parser("analyze", help="Analisar um ou mais MKVs")
+    analyze = subparsers.add_parser("analyze", help="Analyze one or more MKVs")
     _add_input_arguments(analyze)
-    analyze.add_argument("--report", type=Path, help="Guardar relatório JSON v1")
+    analyze.add_argument("--report", type=Path, help="Save a JSON v1 report")
 
-    process = subparsers.add_parser("process", help="Analisar e processar um ou mais MKVs")
+    process = subparsers.add_parser("process", help="Analyze and process one or more MKVs")
     _add_input_arguments(process)
     process.add_argument("--codec", choices=[item.value for item in CodecProfile], default="h264")
     process.add_argument("--mode", choices=[item.value for item in ProcessingMode], default="auto")
-    process.add_argument("--output", type=Path, help="Pasta de saída; por defeito usa _fixed")
+    process.add_argument("--output", type=Path, help="Output folder; defaults to _fixed")
     process.add_argument(
         "--crop",
         metavar="L:T:R:B",
-        help="Margens pares a cortar; desligado por defeito",
+        help="Even crop margins; disabled by default",
     )
     process.add_argument(
         "--auto-crop",
         action="store_true",
-        help="Remover automaticamente apenas margens pretas estáveis; crop manual tem prioridade",
+        help="Automatically remove stable black borders only; manual crop takes priority",
     )
     process.add_argument(
         "--denoise",
         choices=("off", "light"),
         default="off",
-        help="Limpeza hqdn3d leve; desligada por defeito",
+        help="Light hqdn3d cleanup; disabled by default",
     )
-    process.add_argument("--replace-output", action="store_true", help="Substituir apenas uma saída existente")
-    process.add_argument("--report", type=Path, help="Guardar relatório agregado da análise")
+    process.add_argument("--replace-output", action="store_true", help="Replace an existing output only")
+    process.add_argument("--report", type=Path, help="Save the aggregate analysis report")
 
-    subparsers.add_parser("gui", help="Abrir a interface gráfica")
+    subparsers.add_parser("gui", help="Open the graphical interface")
     return parser
 
 
 def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("inputs", nargs="+", help="Ficheiros MKV ou pastas")
-    parser.add_argument("--recursive", action="store_true", help="Procurar MKVs em subpastas")
+    parser.add_argument("inputs", nargs="+", help="MKV files or folders")
+    parser.add_argument("--recursive", action="store_true", help="Search for MKVs in subfolders")
 
 
 def _progress_printer(label: str) -> Callable[[float, str], None]:
@@ -90,10 +90,10 @@ def _progress_printer(label: str) -> Callable[[float, str], None]:
 def run_doctor(args: argparse.Namespace) -> int:
     report = Toolchain.discover().doctor(deep_qtgmc=not args.quick)
     for check in report.checks:
-        marker = "OK" if check.ok else "FALHA"
+        marker = "OK" if check.ok else "FAIL"
         print(f"[{marker:5}] {check.name}: {check.detail}")
-    print(f"\nAnálise: {'pronta' if report.analysis_ready else 'indisponível'}")
-    print(f"Processamento completo: {'pronto' if report.processing_ready else 'indisponível'}")
+    print(f"\nAnalysis: {'ready' if report.analysis_ready else 'unavailable'}")
+    print(f"Full processing: {'ready' if report.processing_ready else 'unavailable'}")
     return EXIT_OK if report.processing_ready else EXIT_DEPENDENCY
 
 
@@ -101,7 +101,7 @@ def run_analyze(args: argparse.Namespace) -> int:
     tools = Toolchain.discover()
     paths = collect_inputs(args.inputs, recursive=args.recursive)
     if not paths:
-        print("Nenhum MKV encontrado.", file=sys.stderr)
+        print("No MKV files found.", file=sys.stderr)
         return EXIT_FAILED
     results = []
     failures = 0
@@ -111,7 +111,7 @@ def run_analyze(args: argparse.Namespace) -> int:
             result = analyze_file(path, tools, progress=_progress_printer(path.name))
             print()
             print(
-                f"  {result.classification.value} | confiança {result.confidence:.0%} | "
+                f"  {result.classification.value} | confidence {result.confidence:.0%} | "
                 f"IDet {result.idet.interlaced_percent:.3f}% | {result.reason}"
             )
             results.append(result)
@@ -119,10 +119,10 @@ def run_analyze(args: argparse.Namespace) -> int:
                 # Atomic checkpoint: an interruption never discards completed analyses.
                 write_analysis_report(args.report, results)
         except FieldFixError as exc:
-            print(f"\n  ERRO: {exc}", file=sys.stderr)
+            print(f"\n  ERROR: {exc}", file=sys.stderr)
             failures += 1
     if args.report and results:
-        print(f"Relatório: {args.report.resolve()}")
+        print(f"Report: {args.report.resolve()}")
     elif results:
         print(json.dumps([to_dict(result) for result in results], ensure_ascii=False, indent=2))
     return EXIT_FAILED if failures else EXIT_OK
@@ -132,12 +132,12 @@ def run_process(args: argparse.Namespace) -> int:
     tools = Toolchain.discover()
     paths = collect_inputs(args.inputs, recursive=args.recursive)
     if not paths:
-        print("Nenhum MKV encontrado.", file=sys.stderr)
+        print("No MKV files found.", file=sys.stderr)
         return EXIT_FAILED
     try:
         crop = CropMargins.parse(args.crop)
     except ValueError as exc:
-        print(f"Erro: {exc}", file=sys.stderr)
+        print(f"Error: {exc}", file=sys.stderr)
         return EXIT_FAILED
     config = JobConfig(
         codec=CodecProfile(args.codec),
@@ -152,7 +152,7 @@ def run_process(args: argparse.Namespace) -> int:
     failures = 0
     ambiguous = 0
     for index, path in enumerate(paths, 1):
-        print(f"[{index}/{len(paths)}] A analisar {path.name}")
+        print(f"[{index}/{len(paths)}] Analyzing {path.name}")
         try:
             analysis = analyze_file(path, tools, progress=_progress_printer(path.name))
             analyses.append(analysis)
@@ -161,18 +161,18 @@ def run_process(args: argparse.Namespace) -> int:
             print(f"\n  {analysis.classification.value}: {analysis.reason}")
             result = process_file(analysis, config, tools, progress=_progress_printer(path.name))
             print()
-            status = "já concluído" if result.skipped else "concluído"
+            status = "already completed" if result.skipped else "completed"
             print(f"  {status}: {result.output}")
         except KeyboardInterrupt:
-            print("\nCancelado.", file=sys.stderr)
+            print("\nCancelled.", file=sys.stderr)
             return EXIT_CANCELLED
         except FieldFixError as exc:
-            print(f"\n  ERRO: {exc}", file=sys.stderr)
+            print(f"\n  ERROR: {exc}", file=sys.stderr)
             failures += 1
-            if "ambígu" in str(exc).lower():
+            if "ambigu" in str(exc).lower():
                 ambiguous += 1
     if args.report and analyses:
-        print(f"Relatório: {args.report.resolve()}")
+        print(f"Report: {args.report.resolve()}")
     if ambiguous:
         return EXIT_AMBIGUOUS
     return EXIT_FAILED if failures else EXIT_OK
@@ -194,11 +194,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "process":
             return run_process(args)
     except KeyboardInterrupt:
-        print("\nCancelado.", file=sys.stderr)
+        print("\nCancelled.", file=sys.stderr)
         return EXIT_CANCELLED
     except FieldFixError as exc:
         message = str(exc)
-        print(f"Erro: {message}", file=sys.stderr)
+        print(f"Error: {message}", file=sys.stderr)
         if "depend" in message.lower() or "qtgmc" in message.lower():
             return EXIT_DEPENDENCY
         return EXIT_FAILED

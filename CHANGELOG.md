@@ -1,21 +1,21 @@
 # Changelog
 
-Todas as alterações relevantes deste projeto serão documentadas aqui. O projeto segue [Semantic Versioning](https://semver.org/).
+All notable changes to this project will be documented in this file. The project follows [Semantic Versioning](https://semver.org/).
 
 ## [0.1.0] - 2026-06-29
 
-Primeira versão pública.
+First public release.
 
-### Adicionado
+### Added
 
-- GUI Windows em tema escuro, drag-and-drop, fila, progresso, cancelamento e pré-visualização.
-- CLI com `doctor`, `analyze`, `process` e modos automáticos ou manuais.
-- Deteção integral de progressivo, PAL 2:2, NTSC 3:2, híbrido e entrelaçado real.
-- Pipeline `hybrid50`: VFM para 25p e QTGMC apenas nos segmentos PAL 50i confirmados.
-- QTGMC com source matching conservador, suporte TFF/BFF e saída 50p/59,94p.
-- H.264, HEVC 10-bit e FFV1, com áudio, legendas, anexos e capítulos copiados.
-- Auto-crop conservador opcional, desligado por defeito.
-- Saídas atómicas, SHA-256, manifestos versionados e validação integral de FPS, DAR/SAR e combing.
-- Ambiente portátil VapourSynth R76 + vs-jetpack e executáveis PyInstaller.
+- English dark-mode Windows GUI with drag-and-drop, queue management, progress, cancellation and preview.
+- CLI with `doctor`, `analyze`, `process`, and automatic or manual modes.
+- Full-file detection of progressive, PAL 2:2, NTSC 3:2, hybrid and true interlaced material.
+- `hybrid50` pipeline: VFM for 25p and QTGMC only for confirmed PAL 50i segments.
+- QTGMC with conservative source matching, TFF/BFF support and 50p/59.94p output.
+- H.264, 10-bit HEVC and FFV1 profiles, with audio, subtitles, attachments and chapters copied.
+- Conservative opt-in auto-crop, disabled by default.
+- Atomic outputs, SHA-256 verification, versioned manifests and full FPS, DAR/SAR and combing validation.
+- Portable VapourSynth R76 + vs-jetpack environment and PyInstaller executables.
 
 [0.1.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.1.0

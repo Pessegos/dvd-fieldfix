@@ -41,7 +41,7 @@ def generate_preview(
     destination = Path(directory) if directory else Path(tempfile.mkdtemp(prefix="dvd-fieldfix-preview-"))
     destination.mkdir(parents=True, exist_ok=True)
     source_png = destination / "original.png"
-    corrected_png = destination / "corrigido.png"
+    corrected_png = destination / "corrected.png"
     timestamp = preview_timestamp(analysis)
     _extract_source_frame(tools.ffmpeg, analysis.media.path, timestamp, source_png)
     mode = resolve_mode(analysis, config.mode)
@@ -56,7 +56,7 @@ def generate_preview(
             tools, analysis, config, mode, timestamp, destination, corrected_png
         )
     else:
-        raise ProcessingError(f"Pré-visualização não suporta {mode}")
+        raise ProcessingError(f"Preview does not support {mode}")
     return source_png, corrected_png, destination
 
 
@@ -176,4 +176,4 @@ def _extract_vapoursynth_frame(
     _, producer_error = producer.communicate(timeout=30)
     if consumer.returncode or producer.returncode:
         message = (producer_error + b"\n" + consumer_error).decode("utf-8", errors="replace")
-        raise DependencyError("Não foi possível gerar a pré-visualização QTGMC:\n" + message[-2000:])
+        raise DependencyError("Could not generate the QTGMC preview:\n" + message[-2000:])
