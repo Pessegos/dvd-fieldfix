@@ -18,13 +18,16 @@ from dvd_fieldfix.models import (
 )
 from dvd_fieldfix.processing import (
     _expected_output_fps,
+    _expected_output_frames,
+    _frame_in_ranges,
+    _fieldmatch_script,
     _hybrid_frame_ranges,
     _hybrid_script,
     _sar_after_crop,
     codec_arguments,
     effective_crop,
-    fieldmatch_filter,
     resolve_mode,
+    restoration_filters,
 )
 from dvd_fieldfix.tools import AmbiguousSourceError, parse_ffmpeg_progress_line
 
@@ -73,20 +76,33 @@ def test_codec_profiles() -> None:
     assert "ffv1" in codec_arguments(CodecProfile.FFV1)
 
 
-def test_fieldmatch_filter_is_conditional_and_progressive() -> None:
-    value = fieldmatch_filter(analysis(), JobConfig())
-    assert "fieldmatch=order=tff" in value
-    assert "yadif=mode=send_frame:parity=auto:deint=interlaced" in value
-    assert "setsar=16/15" in value
-    assert value.endswith("setfield=prog")
+def test_fieldmatch_uses_conditional_qtgmc_without_yadif() -> None:
+    script = _fieldmatch_script(
+        analysis().media.path, Path("cache.bsindex"), True, decimate=False
+    )
+    assert "core.vivtc.VFM" in script
+    assert "SourceMatchMode.BASIC" in script
+    assert "core.std.SelectEvery(bobbed, cycle=2, offsets=0)" in script
+    assert "FrameEval" in script
+    assert "_Combed" in script
+    assert "yadif" not in script.lower()
+    assert "VDecimate(output)" not in script
+
+
+def test_ntsc_fieldmatch_decimates_after_conditional_qtgmc() -> None:
+    script = _fieldmatch_script(
+        analysis().media.path, Path("cache.bsindex"), False, decimate=True
+    )
+    assert "order=0" in script
+    assert "core.vivtc.VDecimate(output)" in script
 
 
 def test_restoration_is_opt_in() -> None:
-    value = fieldmatch_filter(
+    value = restoration_filters(
         analysis(),
         JobConfig(crop=CropMargins(8, 0, 8, 0), denoise=True),
     )
-    assert "crop=iw-16" in value
+    assert any("crop=iw-16" in item for item in value)
     assert "hqdn3d=1:1:3:3" in value
 
 
@@ -95,7 +111,7 @@ def test_auto_crop_uses_analysis_suggestion() -> None:
     item.crop_suggestion = "crop=712:576:0:0"
     config = JobConfig(auto_crop=True)
     assert effective_crop(item, config) == CropMargins(0, 0, 8, 0)
-    assert "crop=iw-8:ih-0:0:0" in fieldmatch_filter(item, config)
+    assert "crop=iw-8:ih-0:0:0" in restoration_filters(item, config)
 
 
 def test_manual_crop_overrides_auto_crop() -> None:
@@ -142,3 +158,20 @@ def test_expected_output_rate_tracks_processing_mode() -> None:
     assert _expected_output_fps(item, ProcessingMode.FIELDMATCH) == 25
     assert _expected_output_fps(item, ProcessingMode.HYBRID50) == 50
     assert _expected_output_fps(item, ProcessingMode.QTGMC) == 50
+
+
+def test_expected_frame_count_tracks_temporal_transform() -> None:
+    item = analysis()
+    assert _expected_output_frames(item, ProcessingMode.FIELDMATCH) == 1500
+    assert _expected_output_frames(item, ProcessingMode.HYBRID50) == 3000
+    assert _expected_output_frames(item, ProcessingMode.QTGMC) == 3000
+    item.cadence = "3:2"
+    assert _expected_output_frames(item, ProcessingMode.FIELDMATCH) == 1200
+
+
+def test_frame_range_lookup_uses_half_open_intervals() -> None:
+    ranges = [(10, 20), (30, 40)]
+    assert _frame_in_ranges(10, ranges)
+    assert _frame_in_ranges(39, ranges)
+    assert not _frame_in_ranges(20, ranges)
+    assert not _frame_in_ranges(29, ranges)

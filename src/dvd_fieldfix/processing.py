@@ -45,6 +45,10 @@ from .tools import (
 
 
 MANIFEST_SUFFIX = ".dvd-fieldfix.json"
+SIGNALSTATS_FRAME_RE = re.compile(r"frame:\s*(\d+)")
+SIGNALSTATS_YDIF_RE = re.compile(r"lavfi\.signalstats\.YDIF=([0-9.+-]+)")
+CLEAN_PAIR_YDIF_THRESHOLD = 0.75
+CLEAN_PAIR_REQUIRED_PERCENT = 98.0
 
 
 def resolve_mode(analysis: AnalysisResult, requested: ProcessingMode) -> ProcessingMode:
@@ -108,19 +112,6 @@ def codec_arguments(profile: CodecProfile) -> list[str]:
             "yuv420p",
         ]
     raise ProcessingError(f"Unknown profile: {profile}")
-
-
-def fieldmatch_filter(analysis: AnalysisResult, config: JobConfig) -> str:
-    order = analysis.field_order or "tff"
-    filters = [
-        f"fieldmatch=order={order}:mode=pc_n:combmatch=full",
-        "yadif=mode=send_frame:parity=auto:deint=interlaced",
-    ]
-    if analysis.cadence == "3:2":
-        filters.append("decimate")
-    filters.extend(restoration_filters(analysis, config))
-    filters.append("setfield=prog")
-    return ",".join(filters)
 
 
 def restoration_filters(analysis: AnalysisResult, config: JobConfig) -> list[str]:
@@ -248,7 +239,7 @@ def process_file(
     tools = tools or Toolchain.discover()
     tools.require_analysis()
     mode = resolve_mode(analysis, config.mode)
-    if mode in {ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
+    if mode in {ProcessingMode.FIELDMATCH, ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
         tools.require_qtgmc()
         doctor = tools.doctor(deep_qtgmc=True)
         failed = [check.detail for check in doctor.checks if check.name == "QTGMC" and not check.ok]
@@ -290,11 +281,16 @@ def process_file(
                 expected_dar=_display_aspect_ratio(analysis.media),
                 output_dar=_display_aspect_ratio(analysis.media),
                 aspect_ratio_valid=True,
+                expected_frames=analysis.idet.frames or None,
+                decoded_frames=analysis.idet.frames or None,
+                frame_count_valid=True,
+                clean_pair_match_percent=100.0,
+                cadence_valid=True,
                 messages=["Byte-for-byte copy confirmed by SHA-256"],
             )
             action = "copy"
         elif mode == ProcessingMode.FIELDMATCH:
-            _encode_fieldmatch(analysis, config, tools, partial, cancel_event, progress)
+            _encode_fieldmatch(analysis, config, tools, partial, work, cancel_event, progress)
             validation = validate_output(
                 analysis, partial, tools, mode=mode, cancel_event=cancel_event, progress=progress
             )
@@ -386,33 +382,26 @@ def _encode_fieldmatch(
     config: JobConfig,
     tools: Toolchain,
     partial: Path,
+    work: Path,
     cancel_event: threading.Event | None,
     progress: ProgressCallback | None,
 ) -> None:
-    assert tools.ffmpeg
-    command = [tools.ffmpeg, "-hide_banner", "-y", "-i", analysis.media.path]
-    command.extend(_source_maps("0"))
-    command.extend(["-map_metadata", "0", "-map_chapters", "0"])
-    command.extend(["-vf", fieldmatch_filter(analysis, config)])
-    command.extend(codec_arguments(config.codec))
-    command.extend(color_arguments(analysis))
-    command.extend(_copy_nonvideo_arguments())
-    command.extend(_video_metadata_arguments(analysis))
-    command.extend(["-max_muxing_queue_size", "4096", "-progress", "pipe:1", "-nostats", str(partial)])
-    _run_ffmpeg_progress(command, analysis.media.duration, cancel_event, progress)
-
-
-def _source_maps(prefix: str) -> list[str]:
-    return [
-        "-map",
-        f"{prefix}:v:0",
-        "-map",
-        f"{prefix}:a?",
-        "-map",
-        f"{prefix}:s?",
-        "-map",
-        f"{prefix}:t?",
-    ]
+    assert tools.ffmpeg and tools.vspipe
+    script = work / "fieldmatch.vpy"
+    cache = work / "bestsource.bsindex"
+    tff = (analysis.field_order or "tff") == "tff"
+    script.write_text(
+        _fieldmatch_script(
+            analysis.media.path,
+            cache,
+            tff,
+            decimate=analysis.cadence == "3:2",
+        ),
+        encoding="utf-8",
+    )
+    _encode_vapoursynth(
+        analysis, config, tools, partial, script, cancel_event, progress
+    )
 
 
 def _copy_nonvideo_arguments() -> list[str]:
@@ -547,6 +536,51 @@ def _source_maps_for_qtgmc() -> list[str]:
     ]
 
 
+def _fieldmatch_script(source: str, cache: Path, tff: bool, *, decimate: bool) -> str:
+    order = 1 if tff else 0
+    decimate_line = "output = core.vivtc.VDecimate(output)" if decimate else ""
+    return f"""\
+import vapoursynth as vs
+from vapoursynth import core
+from vsdeinterlace import QTempGaussMC
+
+SOURCE = {source!r}
+CACHE = {str(cache)!r}
+TFF = {tff!r}
+
+source = core.bs.VideoSource(source=SOURCE, cachepath=CACHE)
+source = core.std.SetFrameProps(source, _FieldBased={2 if tff else 1})
+
+matched = core.vivtc.VFM(
+    source, order={order}, field=2, mode=1, micmatch=1
+)
+matched = core.std.SetFrameProps(matched, _FieldBased=0)
+
+# QTGMC remains lazy: only a VFM frame still marked as combed requests this
+# graph. Selecting the first bobbed frame keeps the same reference field used
+# by VFM for both TFF and BFF input.
+qtgmc = QTempGaussMC().source_match(
+    mode=QTempGaussMC.SourceMatchMode.BASIC
+).sharpen(strength=0)
+bobbed = qtgmc.bob(source, tff=TFF)
+fallback = core.std.SelectEvery(bobbed, cycle=2, offsets=0)
+fallback = core.std.SetFrameProps(fallback, _FieldBased=0)
+
+def choose(n, f):
+    return fallback if int(f.props.get('_Combed', 0)) > 0 else matched
+
+output = core.std.FrameEval(
+    matched,
+    choose,
+    prop_src=matched,
+    clip_src=[matched, fallback],
+)
+{decimate_line}
+output = core.std.SetFrameProps(output, _FieldBased=0)
+output.set_output()
+"""
+
+
 def _qtgmc_script(source: str, cache: Path, tff: bool) -> str:
     return f"""\
 import vapoursynth as vs
@@ -636,39 +670,6 @@ output.set_output()
 """
 
 
-def _run_ffmpeg_progress(
-    command: list[str],
-    duration: float,
-    cancel_event: threading.Event | None,
-    progress: ProgressCallback | None,
-) -> None:
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **popen_kwargs(),
-    )
-    errors: list[str] = []
-    thread = threading.Thread(target=drain_text_stream, args=(process.stderr, errors), daemon=True)
-    thread.start()
-    assert process.stdout
-    for line in process.stdout:
-        if cancel_event and cancel_event.is_set():
-            terminate_process_tree(process)
-            thread.join(timeout=2)
-            raise CancelledError("Encoding cancelled")
-        value = parse_ffmpeg_progress_line(line, duration)
-        if value is not None and progress:
-            progress(value * 0.82, "Encoding video")
-    returncode = process.wait()
-    thread.join(timeout=5)
-    if returncode:
-        raise ProcessingError("FFmpeg failed:\n" + "\n".join(errors[-30:]))
-
-
 def _run_pipeline_progress(
     producer_command: list[str],
     consumer_command: list[str],
@@ -730,6 +731,111 @@ def _drain_binary_lines(stream: object, collector: list[str]) -> None:
             collector.append(line.decode("utf-8", errors="replace").rstrip())
         else:
             collector.append(str(line).rstrip())
+
+
+def _expected_output_frames(analysis: AnalysisResult, mode: ProcessingMode) -> int | None:
+    input_frames = analysis.idet.frames
+    if not input_frames and analysis.input_fps and analysis.media.duration > 0:
+        input_frames = round(analysis.input_fps * analysis.media.duration)
+    if not input_frames:
+        return None
+    if mode in {ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
+        return input_frames * 2
+    if mode == ProcessingMode.FIELDMATCH and analysis.cadence == "3:2":
+        return round(input_frames * 4 / 5)
+    return input_frames
+
+
+def _frame_in_ranges(frame: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= frame < end for start, end in ranges)
+
+
+def _scan_temporal_cadence(
+    analysis: AnalysisResult,
+    output_media: MediaInfo,
+    path: Path,
+    tools: Toolchain,
+    mode: ProcessingMode,
+    cancel_event: threading.Event | None,
+    progress: ProgressCallback | None,
+) -> tuple[int, float | None]:
+    assert tools.ffmpeg
+    command = [
+        tools.ffmpeg,
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        str(path),
+        "-map",
+        "0:v:0",
+        "-vf",
+        "signalstats,metadata=mode=print:key=lavfi.signalstats.YDIF",
+        "-an",
+        "-sn",
+        "-dn",
+        "-progress",
+        "pipe:1",
+        "-f",
+        "null",
+        os.devnull,
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **popen_kwargs(),
+    )
+    decoded_frames = 0
+    clean_pairs = 0
+    matched_clean_pairs = 0
+    current_frame: int | None = None
+    error_lines: list[str] = []
+    hybrid_ranges = _hybrid_frame_ranges(analysis) if mode == ProcessingMode.HYBRID50 else []
+
+    def read_metadata() -> None:
+        nonlocal current_frame, decoded_frames, clean_pairs, matched_clean_pairs
+        assert process.stderr
+        for line in process.stderr:
+            frame_match = SIGNALSTATS_FRAME_RE.search(line)
+            if frame_match:
+                current_frame = int(frame_match.group(1))
+                decoded_frames = max(decoded_frames, current_frame + 1)
+                continue
+            ydif_match = SIGNALSTATS_YDIF_RE.search(line)
+            if ydif_match and current_frame is not None:
+                if (
+                    mode == ProcessingMode.HYBRID50
+                    and current_frame % 2 == 1
+                    and not _frame_in_ranges(current_frame, hybrid_ranges)
+                ):
+                    clean_pairs += 1
+                    if float(ydif_match.group(1)) <= CLEAN_PAIR_YDIF_THRESHOLD:
+                        matched_clean_pairs += 1
+                continue
+            error_lines.append(line.rstrip())
+            if len(error_lines) > 40:
+                error_lines.pop(0)
+
+    thread = threading.Thread(target=read_metadata, daemon=True)
+    thread.start()
+    assert process.stdout
+    for line in process.stdout:
+        if cancel_event and cancel_event.is_set():
+            terminate_process_tree(process)
+            thread.join(timeout=2)
+            raise CancelledError("Temporal validation cancelled")
+        value = parse_ffmpeg_progress_line(line, output_media.duration)
+        if value is not None and progress:
+            progress(0.94 + value * 0.04, "Validating temporal cadence")
+    returncode = process.wait()
+    thread.join(timeout=5)
+    if returncode:
+        raise ProcessingError("Temporal cadence scan failed:\n" + "\n".join(error_lines[-15:]))
+    pair_percent = 100.0 * matched_clean_pairs / clean_pairs if clean_pairs else None
+    return decoded_frames, pair_percent
 
 
 def validate_output(
@@ -832,6 +938,37 @@ def validate_output(
             f"Output has {residual_percent:.3f}% residual combing "
             f"({residual_frames} frames) or field_order={field_flag}"
         )
+    if progress:
+        progress(0.94, "Validating temporal cadence")
+    result.expected_frames = _expected_output_frames(analysis, mode)
+    result.decoded_frames, result.clean_pair_match_percent = _scan_temporal_cadence(
+        analysis,
+        output_media,
+        path,
+        tools,
+        mode,
+        cancel_event,
+        progress,
+    )
+    result.frame_count_valid = bool(
+        result.expected_frames is not None
+        and result.decoded_frames is not None
+        and abs(result.decoded_frames - result.expected_frames) <= 2
+    )
+    if not result.frame_count_valid:
+        result.messages.append(
+            f"Decoded frame count is {result.decoded_frames}; expected {result.expected_frames}"
+        )
+    pair_pattern_valid = bool(
+        mode != ProcessingMode.HYBRID50
+        or result.clean_pair_match_percent is None
+        or result.clean_pair_match_percent >= CLEAN_PAIR_REQUIRED_PERCENT
+    )
+    result.cadence_valid = result.frame_count_valid and pair_pattern_valid
+    if not pair_pattern_valid:
+        result.messages.append(
+            f"Only {result.clean_pair_match_percent:.3f}% of clean hybrid pairs preserve the expected 25p-to-50p cadence"
+        )
     result.valid = (
         result.duration_delta <= 0.100
         and result.streams_preserved
@@ -839,11 +976,14 @@ def validate_output(
         and result.progressive_output
         and result.frame_rate_valid
         and result.aspect_ratio_valid
+        and result.cadence_valid
     )
     if result.valid:
-        result.messages.append("Duration, streams, decoding, frame rate, aspect ratio and progressiveness validated")
+        result.messages.append(
+            "Duration, streams, decoding, frame count, cadence, frame rate, aspect ratio and progressiveness validated"
+        )
     if progress:
-        progress(0.98, "Validation completed")
+        progress(0.99, "Validation completed")
     return result
 
 

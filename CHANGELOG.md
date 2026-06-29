@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-06-29
+
+Temporal-fidelity release.
+
+### Changed
+
+- Replaced the remaining Yadif fallback after VFM with conditional QTGMC source matching for both PAL 2:2 and NTSC 3:2 sources.
+- Made field-matched previews use the exact VapourSynth graph used by production encoding.
+- Extended `doctor` to execute the conditional field-match, hybrid 50p and NTSC decimation graphs instead of only loading their plugins.
+- Bumped the processing pipeline version so outputs made by the earlier temporal graph are never mistaken for current results.
+
+### Added
+
+- Full decoded-frame-count validation for 25p, hybrid/true-interlaced 50p and NTSC 23.976p outputs.
+- Hybrid cadence validation that confirms clean 25p sections remain exact duplicated pairs at 50p while true 50i sections retain their temporal resolution.
+- Real-source sample guide covering the DVD variants most useful for further validation.
+- End-to-end PAL TFF and BFF true-interlace fixtures, plus real-source PAL field-match and hybrid-path verification.
+
 ## [0.1.0] - 2026-06-29
 
 First public release.
@@ -19,3 +37,4 @@ First public release.
 - Portable VapourSynth R76 + vs-jetpack environment and PyInstaller executables.
 
 [0.1.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.1.0
+[0.2.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.2.0

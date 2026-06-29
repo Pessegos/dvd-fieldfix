@@ -9,7 +9,7 @@
 DVD FieldFix analyzes MKV files sourced from DVDs and applies the least destructive treatment possible:
 
 - progressive video is copied byte for byte;
-- recoverable PAL 2:2 or NTSC 3:2 uses field matching, with conditional deinterlacing for isolated residual frames;
+- recoverable PAL 2:2 or NTSC 3:2 uses VFM field matching, with conditional QTGMC only for isolated residual frames;
 - hybrid PAL uses VFM for the 25p body and QTGMC for confirmed 50i segments, producing progressive 50p;
 - true interlaced video uses VapourSynth/QTGMC at 50p or 59.94p;
 - hybrid NTSC and contradictory results stop for manual review rather than risk an incorrect cadence;
@@ -109,11 +109,19 @@ Validation checks:
 - full decoding without errors;
 - duration within 100 ms;
 - audio, subtitle and attachment stream counts;
+- exact decoded frame count for 25p, 50p and decimated 23.976p paths;
+- duplicated-frame cadence outside confirmed 50i sections of hybrid PAL sources;
 - expected frame rate and progressive field flag;
 - residual combing;
 - SAR/DAR preservation.
 
 A completed output is skipped only when its source hash, pipeline version, configuration and output hash all match. Incompatible collisions are blocked.
+
+## Real-source test samples
+
+DVD mastering varies substantially between releases. Short samples from unrelated PAL and NTSC discs help exercise field order, cadence changes, blended fields and authoring faults that synthetic fixtures cannot reproduce.
+
+See [Real-source testing](docs/TEST_SAMPLES.md) for the most useful sample types, how to create compact excerpts, and what metadata to include. Copyrighted video samples are never committed to this repository.
 
 ## Building the executables
 

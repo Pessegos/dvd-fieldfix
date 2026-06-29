@@ -141,7 +141,7 @@ class Toolchain:
         )
         if self.ffmpeg:
             filters = run_capture([self.ffmpeg, "-hide_banner", "-filters"], check=False).stdout
-            required_filters = ("idet", "fieldmatch", "yadif", "setfield", "hqdn3d", "crop")
+            required_filters = ("idet", "fieldmatch", "setfield", "hqdn3d", "crop", "signalstats")
             absent = [item for item in required_filters if item not in filters]
             report.checks.append(
                 DoctorCheck(
@@ -194,24 +194,41 @@ qtgmc = QTempGaussMC().source_match(
 ).sharpen(strength=0)
 bobbed50 = qtgmc.bob(clip, tff=True)
 bobbed50 = core.std.SetFrameProps(bobbed50, _FieldBased=0)
+fallback25 = core.std.SelectEvery(bobbed50, cycle=2, offsets=0)
+fallback25 = core.std.SetFrameProps(fallback25, _FieldBased=0)
 def choose(n, f):
+    return fallback25 if int(f.props.get('_Combed', 0)) else matched
+fieldmatched = core.std.FrameEval(
+    matched, choose, prop_src=matched, clip_src=[matched, fallback25]
+)
+fieldmatched.set_output(0)
+def choose_hybrid(n, f):
     return bobbed50 if int(f.props.get('_Combed', 0)) else matched50
 hybrid = core.std.FrameEval(
-    matched50, choose, prop_src=matched50, clip_src=[matched50, bobbed50]
+    matched50, choose_hybrid, prop_src=matched50, clip_src=[matched50, bobbed50]
 )
-hybrid.set_output()
+hybrid.set_output(1)
+core.vivtc.VDecimate(fieldmatched).set_output(2)
 """
         with tempfile.TemporaryDirectory(prefix="dvd-fieldfix-doctor-") as directory:
             path = Path(directory) / "doctor.vpy"
             path.write_text(script, encoding="utf-8")
             # Request frames, rather than only evaluating the graph, so callback
             # signatures and lazy QTGMC/VFM execution are genuinely tested.
-            result = run_capture([self.vspipe, str(path), "--"], check=False, timeout=120)
-        combined = (result.stdout + "\n" + result.stderr).strip()
-        if result.returncode == 0:
-            return True, "QTempGaussMC, VFM and the hybrid 50p pipeline loaded"
+            results = [
+                run_capture(
+                    [self.vspipe, "--outputindex", str(index), str(path), "--"],
+                    check=False,
+                    timeout=120,
+                )
+                for index in range(3)
+            ]
+        combined = "\n".join(result.stdout + "\n" + result.stderr for result in results).strip()
+        if all(result.returncode == 0 for result in results):
+            return True, "QTempGaussMC, VFM, VDecimate and conditional/hybrid pipelines loaded"
         tail = "\n".join(combined.splitlines()[-5:])
-        return False, tail or f"vspipe exited with code {result.returncode}"
+        codes = ", ".join(str(result.returncode) for result in results)
+        return False, tail or f"vspipe exited with codes {codes}"
 
 
 @dataclass(slots=True)

@@ -9,10 +9,10 @@ from pathlib import Path
 from .analysis import parse_rate
 from .models import AnalysisResult, JobConfig, ProcessingMode
 from .processing import (
+    _fieldmatch_script,
     _hybrid_frame_ranges,
     _hybrid_script,
     _qtgmc_script,
-    fieldmatch_filter,
     resolve_mode,
     restoration_filters,
 )
@@ -47,9 +47,7 @@ def generate_preview(
     mode = resolve_mode(analysis, config.mode)
     if mode == ProcessingMode.COPY:
         shutil.copy2(source_png, corrected_png)
-    elif mode == ProcessingMode.FIELDMATCH:
-        _extract_fieldmatched_frame(tools.ffmpeg, analysis, config, timestamp, corrected_png)
-    elif mode in {ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
+    elif mode in {ProcessingMode.FIELDMATCH, ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
         tools.require_qtgmc()
         assert tools.vspipe
         _extract_vapoursynth_frame(
@@ -82,40 +80,6 @@ def _extract_source_frame(ffmpeg: str, source: str, timestamp: float, output: Pa
         raise ProcessingError(completed.stderr.decode("utf-8", errors="replace"))
 
 
-def _extract_fieldmatched_frame(
-    ffmpeg: str,
-    analysis: AnalysisResult,
-    config: JobConfig,
-    timestamp: float,
-    output: Path,
-) -> None:
-    seek = max(0.0, timestamp - 1.0)
-    offset = timestamp - seek
-    command = [
-        ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        f"{seek:.3f}",
-        "-i",
-        analysis.media.path,
-        "-map",
-        "0:v:0",
-        "-vf",
-        fieldmatch_filter(analysis, config),
-        "-ss",
-        f"{offset:.3f}",
-        "-frames:v",
-        "1",
-        "-y",
-        str(output),
-    ]
-    completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs())
-    if completed.returncode:
-        raise ProcessingError(completed.stderr.decode("utf-8", errors="replace"))
-
-
 def _extract_vapoursynth_frame(
     tools: Toolchain,
     analysis: AnalysisResult,
@@ -130,18 +94,28 @@ def _extract_vapoursynth_frame(
     cache = directory / "preview.bsindex"
     tff = (analysis.field_order or "tff") == "tff"
     fps = parse_rate(analysis.media.video.average_frame_rate) if analysis.media.video else 25.0
-    if mode == ProcessingMode.HYBRID50:
+    if mode == ProcessingMode.FIELDMATCH:
+        script_text = _fieldmatch_script(
+            analysis.media.path,
+            cache,
+            tff,
+            decimate=analysis.cadence == "3:2",
+        )
+        output_fps = 24000 / 1001 if analysis.cadence == "3:2" else fps or 25.0
+    elif mode == ProcessingMode.HYBRID50:
         ranges = _hybrid_frame_ranges(analysis)
         script_text = _hybrid_script(
             analysis.media.path, cache, tff, fps or 25.0, ranges
         )
+        output_fps = (fps or 25.0) * 2
     else:
         script_text = _qtgmc_script(analysis.media.path, cache, tff)
+        output_fps = (fps or 25.0) * 2
     script.write_text(
         script_text,
         encoding="utf-8",
     )
-    frame = max(0, round(timestamp * (fps or 25.0) * 2))
+    frame = max(0, round(timestamp * output_fps))
     producer = subprocess.Popen(
         [
             tools.vspipe,
@@ -176,4 +150,4 @@ def _extract_vapoursynth_frame(
     _, producer_error = producer.communicate(timeout=30)
     if consumer.returncode or producer.returncode:
         message = (producer_error + b"\n" + consumer_error).decode("utf-8", errors="replace")
-        raise DependencyError("Could not generate the QTGMC preview:\n" + message[-2000:])
+        raise DependencyError("Could not generate the VapourSynth preview:\n" + message[-2000:])
