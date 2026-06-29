@@ -23,13 +23,18 @@ from dvd_fieldfix.processing import (
     _fieldmatch_script,
     _hybrid_frame_ranges,
     _hybrid_script,
+    _progressive_script,
     _sar_after_crop,
     codec_arguments,
     effective_crop,
     resolve_mode,
     restoration_filters,
 )
-from dvd_fieldfix.tools import AmbiguousSourceError, parse_ffmpeg_progress_line
+from dvd_fieldfix.tools import (
+    AmbiguousSourceError,
+    FFmpegProgressState,
+    parse_ffmpeg_progress_line,
+)
 
 
 def analysis(classification: Classification = Classification.FIELD_MATCHABLE) -> AnalysisResult:
@@ -73,6 +78,9 @@ def test_codec_profiles() -> None:
     assert "yuv420p10le" in hevc10
     assert h264[h264.index("-preset") + 1] == "veryslow"
     assert hevc10[hevc10.index("-preset") + 1] == "veryslow"
+    assert h264[h264.index("-crf") + 1] == "14"
+    assert "subme=11:merange=32:fast-pskip=0:dct-decimate=0" in h264
+    assert "rd-refine=1" in hevc10
     assert "ffv1" in codec_arguments(CodecProfile.FFV1)
 
 
@@ -95,6 +103,21 @@ def test_ntsc_fieldmatch_decimates_after_conditional_qtgmc() -> None:
     )
     assert "order=0" in script
     assert "core.vivtc.VDecimate(output)" in script
+
+
+def test_dotcrawl_is_an_explicit_post_reconstruction_step() -> None:
+    fieldmatched = _fieldmatch_script(
+        analysis().media.path,
+        Path("cache.bsindex"),
+        True,
+        decimate=True,
+        dotcrawl=True,
+    )
+    assert fieldmatched.index("core.dotkill.DotKillS") < fieldmatched.index("VDecimate(output)")
+    progressive = _progressive_script(
+        analysis().media.path, Path("cache.bsindex"), dotcrawl=True
+    )
+    assert "core.dotkill.DotKillS(output, iterations=1)" in progressive
 
 
 def test_restoration_is_opt_in() -> None:
@@ -133,11 +156,23 @@ def test_auto_mode_and_ambiguity() -> None:
     )
     with pytest.raises(AmbiguousSourceError):
         resolve_mode(analysis(Classification.AMBIGUOUS), ProcessingMode.AUTO)
+    progressive = analysis(Classification.PROGRESSIVE)
+    assert (
+        resolve_mode(progressive, ProcessingMode.AUTO, restoration=True)
+        == ProcessingMode.RESTORE
+    )
 
 
 def test_progress_parser() -> None:
     assert parse_ffmpeg_progress_line("out_time_us=5000000", 10) == 0.5
     assert parse_ffmpeg_progress_line("progress=end", 10) == 1.0
+    state = FFmpegProgressState()
+    for line in ("frame=250", "fps=25.0", "speed=1.0x"):
+        state.feed(line)
+    details = state.details(total_frames=1000, elapsed_seconds=10)
+    assert details.current_frame == 250
+    assert details.fps == 25
+    assert details.eta_seconds == 30
 
 
 def test_hybrid_ranges_and_script_preserve_25p_and_50i() -> None:

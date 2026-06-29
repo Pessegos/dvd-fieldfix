@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-06-29
+
+Series-quality and restoration release.
+
+### Added
+
+- Reusable JSON series profiles for consistent codec, CRF, crop, cleanup and parallel-job choices.
+- Hover descriptions for the main GUI controls and a clearer `Check setup` button in place of `Doctor`.
+- Detailed current/total frame, FPS, elapsed-time and ETA reporting in both the GUI and CLI.
+- One- or two-episode GUI processing; two HEVC/QTGMC jobs improved measured queue time by about 40% on the development 8-core CPU.
+- Conservative opt-in DotKillS cleanup for dot crawl and rainbow artifacts, included in previews, dependency checks and output fingerprints.
+- A `restore` path so requested restoration is applied to progressive sources instead of being silently ignored.
+- An About dialog documenting that the current feather is Tcl/Tk's built-in default icon.
+
+### Changed
+
+- Set the quality-first H.264 and HEVC default to editable CRF 14 while keeping `veryslow` and no automatic animation tune.
+- Added x264 detail-oriented `subme=11`, 32-pixel motion range, disabled fast P-skip and disabled DCT decimation.
+- Added x265 RD refinement while preserving its automatic WPP/thread-pool decisions.
+- Kept VSPipe's automatic concurrent-request scheduling after benchmarks showed every tested manual limit was slower.
+- Extended the portable runtime with the pinned `vapoursynth-dotkill` 3.0 plugin.
+- Bumped the processing pipeline version for the new encoder and restoration graphs.
+
 ## [0.2.0] - 2026-06-29
 
 Temporal-fidelity release.
@@ -38,3 +61,4 @@ First public release.
 
 [0.1.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.2.0
+[0.3.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.3.0

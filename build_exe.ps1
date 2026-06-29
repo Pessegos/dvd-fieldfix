@@ -25,6 +25,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $Root 'setup_qtgmc.ps1') -Destination (Join-Path $Root 'dist\DVD-FieldFix') -Force
     Copy-Item -LiteralPath (Join-Path $Root 'qtgmc-requirements.txt') -Destination (Join-Path $Root 'dist\DVD-FieldFix') -Force
     Copy-Item -LiteralPath (Join-Path $Root 'README.md') -Destination (Join-Path $Root 'dist\DVD-FieldFix') -Force
+    Copy-Item -LiteralPath (Join-Path $Root 'docs') -Destination (Join-Path $Root 'dist\DVD-FieldFix\docs') -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $Root 'LICENSE') -Destination (Join-Path $Root 'dist\DVD-FieldFix') -Force
     Write-Host "Build completed in $Root\dist" -ForegroundColor Green
 } finally {

@@ -10,7 +10,7 @@ from typing import Any
 
 
 REPORT_SCHEMA_VERSION = 1
-PROCESSING_PIPELINE_VERSION = 5
+PROCESSING_PIPELINE_VERSION = 6
 
 
 class Classification(str, enum.Enum):
@@ -25,6 +25,7 @@ class Classification(str, enum.Enum):
 class ProcessingMode(str, enum.Enum):
     AUTO = "auto"
     COPY = "copy"
+    RESTORE = "restore"
     FIELDMATCH = "fieldmatch"
     HYBRID50 = "hybrid50"
     QTGMC = "qtgmc"
@@ -170,12 +171,22 @@ class CropMargins:
 @dataclass(slots=True)
 class JobConfig:
     codec: CodecProfile = CodecProfile.H264
+    crf: float = 14.0
     mode: ProcessingMode = ProcessingMode.AUTO
     output_directory: str | None = None
     crop: CropMargins = field(default_factory=CropMargins)
     auto_crop: bool = False
     denoise: bool = False
+    dotcrawl: bool = False
     replace_output: bool = False
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.crf <= 51:
+            raise ValueError("CRF must be between 0 and 51")
+
+    @property
+    def has_restoration(self) -> bool:
+        return self.crop.enabled or self.auto_crop or self.denoise or self.dotcrawl
 
     def fingerprint(self) -> str:
         document = {

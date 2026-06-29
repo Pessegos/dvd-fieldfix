@@ -2,3 +2,4 @@
 # The deinterlace extra includes BestSource, MVTools and the plugins used by QTempGaussMC.
 vapoursynth==76
 vsjetpack[deinterlace]==2.0.0
+vapoursynth-dotkill==3.0

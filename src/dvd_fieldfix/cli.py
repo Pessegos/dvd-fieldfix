@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import threading
 import time
@@ -12,7 +13,7 @@ from . import __version__
 from .analysis import analyze_file, collect_inputs, write_analysis_report
 from .models import CodecProfile, CropMargins, JobConfig, ProcessingMode, to_dict
 from .processing import process_file
-from .tools import FieldFixError, Toolchain
+from .tools import FieldFixError, ProgressDetails, Toolchain
 
 
 EXIT_OK = 0
@@ -30,7 +31,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
-    doctor = subparsers.add_parser("doctor", help="Check FFmpeg, encoders, QTGMC and hybrid VFM")
+    doctor = subparsers.add_parser(
+        "doctor", help="Check whether FFmpeg, encoders and VapourSynth are ready"
+    )
     doctor.add_argument("--quick", action="store_true", help="Skip the QTGMC/VFM frame test")
 
     analyze = subparsers.add_parser("analyze", help="Analyze one or more MKVs")
@@ -40,12 +43,23 @@ def build_parser() -> argparse.ArgumentParser:
     process = subparsers.add_parser("process", help="Analyze and process one or more MKVs")
     _add_input_arguments(process)
     process.add_argument("--codec", choices=[item.value for item in CodecProfile], default="h264")
+    process.add_argument(
+        "--crf",
+        type=float,
+        default=14.0,
+        help="Constant-quality target for H.264/HEVC (0-51; lower is higher quality)",
+    )
     process.add_argument("--mode", choices=[item.value for item in ProcessingMode], default="auto")
     process.add_argument("--output", type=Path, help="Output folder; defaults to _fixed")
     process.add_argument(
         "--crop",
         metavar="L:T:R:B",
         help="Even crop margins; disabled by default",
+    )
+    process.add_argument(
+        "--dotcrawl",
+        action="store_true",
+        help="Apply one conservative spatial DotKillS pass; disabled by default",
     )
     process.add_argument(
         "--auto-crop",
@@ -70,12 +84,35 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--recursive", action="store_true", help="Search for MKVs in subfolders")
 
 
-def _progress_printer(label: str) -> Callable[[float, str], None]:
+def _clock(seconds: float | None) -> str:
+    if seconds is None or not math.isfinite(seconds):
+        return "--:--:--"
+    total = max(0, round(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _progress_printer(label: str) -> Callable[[float, str, ProgressDetails | None], None]:
     last = {"time": 0.0, "text": ""}
 
-    def update(value: float, stage: str) -> None:
+    def update(value: float, stage: str, details: ProgressDetails | None = None) -> None:
         now = time.monotonic()
-        text = f"\r{label}: {value:6.1%}  {stage:<38}"
+        metrics = ""
+        if details:
+            frame = (
+                f"{details.current_frame:,}/{details.total_frames:,} frames"
+                if details.current_frame is not None and details.total_frames is not None
+                else ""
+            )
+            fps = f"{details.fps:.2f} fps" if details.fps is not None else ""
+            timing = (
+                f"elapsed {_clock(details.elapsed_seconds)}  ETA {_clock(details.eta_seconds)}"
+                if details.elapsed_seconds is not None
+                else ""
+            )
+            metrics = "  ".join(part for part in (frame, fps, timing) if part)
+        text = f"\r{label}: {value:6.1%}  {stage:<30}  {metrics:<56}"
         if now - last["time"] >= 0.25 or value >= 1:
             try:
                 print(text, end="", flush=True)
@@ -139,13 +176,18 @@ def run_process(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_FAILED
+    if not 0 <= args.crf <= 51:
+        print("Error: CRF must be between 0 and 51", file=sys.stderr)
+        return EXIT_FAILED
     config = JobConfig(
         codec=CodecProfile(args.codec),
+        crf=args.crf,
         mode=ProcessingMode(args.mode),
         output_directory=str(args.output.resolve()) if args.output else None,
         crop=crop,
         auto_crop=args.auto_crop,
         denoise=args.denoise == "light",
+        dotcrawl=args.dotcrawl,
         replace_output=args.replace_output,
     )
     analyses = []

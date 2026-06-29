@@ -65,13 +65,14 @@ if (-not (Test-Path $Python)) {
     throw 'python.exe was not created in the portable environment.'
 }
 
-Write-Host 'Installing vsjetpack 2.0.0 and deinterlacing plugins...'
+Write-Host 'Installing vsjetpack 2.0.0, deinterlacing plugins and optional DotKill cleanup...'
 & $Python -m pip install --disable-pip-version-check --upgrade setuptools wheel
 if ($LASTEXITCODE -ne 0) {
     throw "Could not prepare setuptools/wheel (exit code $LASTEXITCODE)"
 }
 & $Python -m pip install --disable-pip-version-check --upgrade `
     'vsjetpack[deinterlace]==2.0.0' `
+    'vapoursynth-dotkill==3.0' `
     --extra-index-url $JetIndex `
     --no-build-isolation
 if ($LASTEXITCODE -ne 0) {

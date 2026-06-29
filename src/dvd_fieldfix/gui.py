@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 import tkinter as tk
 import ctypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -22,10 +22,12 @@ except ImportError:
     HAS_DND = False
 
 from .analysis import analyze_file, collect_inputs, write_analysis_report
+from . import __version__
 from .models import AnalysisResult, CodecProfile, CropMargins, JobConfig, ProcessingMode
 from .preview import generate_preview
+from .profiles import load_series_profile, save_series_profile
 from .processing import process_file
-from .tools import CancelledError, FieldFixError, Toolchain
+from .tools import CancelledError, FieldFixError, ProgressDetails, Toolchain
 
 
 BG = "#181a1f"
@@ -36,6 +38,55 @@ MUTED = "#a9afbb"
 ACCENT = "#5b8def"
 ACCENT_ACTIVE = "#76a2f3"
 BORDER = "#3a3f49"
+
+
+class ToolTip:
+    def __init__(self, widget: tk.Misc, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self.pending: str | None = None
+        self.window: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event: object = None) -> None:
+        self._cancel()
+        self.pending = self.widget.after(550, self._show)
+
+    def _cancel(self) -> None:
+        if self.pending:
+            self.widget.after_cancel(self.pending)
+            self.pending = None
+
+    def _show(self) -> None:
+        self.pending = None
+        if self.window or not self.widget.winfo_exists():
+            return
+        self.window = tk.Toplevel(self.widget)
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        x = self.widget.winfo_rootx() + 18
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        self.window.geometry(f"+{x}+{y}")
+        tk.Label(
+            self.window,
+            text=self.text,
+            justify=tk.LEFT,
+            wraplength=380,
+            background=SURFACE_ALT,
+            foreground=TEXT,
+            relief=tk.SOLID,
+            borderwidth=1,
+            padx=9,
+            pady=7,
+        ).pack()
+
+    def _hide(self, _event: object = None) -> None:
+        self._cancel()
+        if self.window:
+            self.window.destroy()
+            self.window = None
 
 
 @dataclass
@@ -51,14 +102,15 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
     def __init__(self) -> None:
         super().__init__()
         self.title("DVD FieldFix")
-        self.geometry("1120x680")
-        self.minsize(900, 560)
+        self.geometry("1240x760")
+        self.minsize(1000, 640)
         self._apply_dark_theme()
         self.tools = Toolchain.discover()
         self.items: dict[str, QueueItem] = {}
         self.cancel_event = threading.Event()
         self.worker: threading.Thread | None = None
         self.preview_directories: list[Path] = []
+        self.tooltips: list[ToolTip] = []
         self._build_ui()
         self.after(50, _set_dark_titlebar, self)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -113,14 +165,47 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         self.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
         self.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
 
+    def _tooltip(self, widget: tk.Misc, text: str) -> None:
+        self.tooltips.append(ToolTip(widget, text))
+
     def _build_ui(self) -> None:
         toolbar = ttk.Frame(self, padding=8)
         toolbar.pack(fill=tk.X)
-        ttk.Button(toolbar, text="Add files", command=self._add_files).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="Add folder", command=self._add_folder).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="Remove", command=self._remove_selected).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="Doctor", command=self._doctor).pack(side=tk.LEFT, padx=12)
-        ttk.Button(toolbar, text="Save report", command=self._save_report).pack(side=tk.LEFT, padx=3)
+        add_files = ttk.Button(toolbar, text="Add files", command=self._add_files)
+        add_files.pack(side=tk.LEFT, padx=3)
+        self._tooltip(add_files, "Add one or more Matroska files to the queue.")
+        add_folder = ttk.Button(toolbar, text="Add folder", command=self._add_folder)
+        add_folder.pack(side=tk.LEFT, padx=3)
+        self._tooltip(add_folder, "Add every MKV found directly inside a folder.")
+        remove = ttk.Button(toolbar, text="Remove", command=self._remove_selected)
+        remove.pack(side=tk.LEFT, padx=3)
+        self._tooltip(remove, "Remove selected entries from the queue. Source files are never deleted.")
+        check_setup = ttk.Button(toolbar, text="Check setup", command=self._doctor)
+        check_setup.pack(side=tk.LEFT, padx=(12, 3))
+        self._tooltip(
+            check_setup,
+            "Verify FFmpeg, encoders, VapourSynth, QTGMC and optional restoration plugins.",
+        )
+        save_report = ttk.Button(toolbar, text="Save report", command=self._save_report)
+        save_report.pack(side=tk.LEFT, padx=3)
+        self._tooltip(save_report, "Save completed detection results as a JSON report.")
+        load_profile = ttk.Button(toolbar, text="Load series profile", command=self._load_profile)
+        load_profile.pack(side=tk.LEFT, padx=(12, 3))
+        self._tooltip(
+            load_profile,
+            "Load one consistent codec, CRF and restoration setup for the whole series.",
+        )
+        save_profile = ttk.Button(toolbar, text="Save series profile", command=self._save_profile)
+        save_profile.pack(side=tk.LEFT, padx=3)
+        self._tooltip(
+            save_profile,
+            "Save the current quality and restoration settings for reuse on every episode.",
+        )
+        about = ttk.Button(toolbar, text="About", command=self._about)
+        about.pack(side=tk.RIGHT, padx=3)
+        self._tooltip(about, "Show the version and application icon provenance.")
+        self.profile_var = tk.StringVar(value="Series profile: unsaved settings")
+        ttk.Label(toolbar, textvariable=self.profile_var).pack(side=tk.RIGHT, padx=12)
 
         columns = ("file", "classification", "confidence", "action", "crop", "status")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
@@ -148,56 +233,141 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             self.tree.drop_target_register(DND_FILES)
             self.tree.dnd_bind("<<Drop>>", self._drop_files)
 
-        options = ttk.LabelFrame(self, text="Options", padding=8)
+        options = ttk.LabelFrame(self, text="Series encoding profile", padding=8)
         options.pack(fill=tk.X, padx=10, pady=4)
         ttk.Label(options, text="Codec:").grid(row=0, column=0, sticky=tk.W)
         self.codec_var = tk.StringVar(value=CodecProfile.H264.value)
-        ttk.Combobox(
+        self.codec_box = ttk.Combobox(
             options,
             textvariable=self.codec_var,
             values=[item.value for item in CodecProfile],
             state="readonly",
-            width=12,
-        ).grid(row=0, column=1, padx=(4, 14))
-        ttk.Label(options, text="Override selected:").grid(row=0, column=2, sticky=tk.W)
+            width=10,
+        )
+        self.codec_box.grid(row=0, column=1, padx=(4, 14), sticky=tk.W)
+        self.codec_box.bind("<<ComboboxSelected>>", self._codec_changed)
+        self._tooltip(
+            self.codec_box,
+            "H.264 maximizes compatibility; HEVC 10-bit improves compression and gradients; FFV1 is mathematically lossless but very large.",
+        )
+        ttk.Label(options, text="CRF:").grid(row=0, column=2, sticky=tk.W)
+        self.crf_var = tk.StringVar(value="14")
+        self.crf_spin = ttk.Spinbox(
+            options,
+            from_=0,
+            to=51,
+            increment=0.5,
+            textvariable=self.crf_var,
+            width=6,
+        )
+        self.crf_spin.grid(row=0, column=3, padx=(4, 14), sticky=tk.W)
+        self._tooltip(
+            self.crf_spin,
+            "Constant-quality target. Lower means higher quality and larger files. 14 is the quality-first series default. FFV1 ignores CRF.",
+        )
+        ttk.Label(options, text="Override selected:").grid(row=0, column=4, sticky=tk.W)
         self.mode_var = tk.StringVar(value=ProcessingMode.AUTO.value)
-        ttk.Combobox(
+        mode_box = ttk.Combobox(
             options,
             textvariable=self.mode_var,
             values=[item.value for item in ProcessingMode],
             state="readonly",
             width=12,
-        ).grid(row=0, column=3, padx=4)
-        ttk.Button(options, text="Apply", command=self._apply_override).grid(row=0, column=4, padx=(0, 14))
-        ttk.Label(options, text="Manual crop L:T:R:B:").grid(row=0, column=5, sticky=tk.W)
-        self.crop_var = tk.StringVar()
-        ttk.Entry(options, textvariable=self.crop_var, width=13).grid(row=0, column=6, padx=4)
-        self.auto_crop_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options, text="Auto crop", variable=self.auto_crop_var).grid(row=0, column=7, padx=10)
-        self.denoise_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options, text="Light denoise", variable=self.denoise_var).grid(row=1, column=8, padx=10, pady=(8, 0))
-
-        ttk.Label(options, text="Output (blank = _fixed):").grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
-        self.output_var = tk.StringVar()
-        ttk.Entry(options, textvariable=self.output_var).grid(
-            row=1, column=2, columnspan=5, sticky=tk.EW, padx=4, pady=(8, 0)
         )
-        ttk.Button(options, text="Browse…", command=self._choose_output).grid(row=1, column=7, pady=(8, 0))
-        options.columnconfigure(6, weight=1)
+        mode_box.grid(row=0, column=5, padx=4)
+        self._tooltip(
+            mode_box,
+            "Keep auto unless a reviewed file needs an explicit copy, restoration, field-match, hybrid50 or QTGMC decision.",
+        )
+        apply_override = ttk.Button(options, text="Apply", command=self._apply_override)
+        apply_override.grid(row=0, column=6, padx=(0, 14))
+        self._tooltip(apply_override, "Apply this temporal-mode override only to selected queue entries.")
+        ttk.Label(options, text="Parallel jobs:").grid(row=0, column=7, sticky=tk.W)
+        self.jobs_var = tk.StringVar(value="1")
+        jobs_box = ttk.Combobox(
+            options,
+            textvariable=self.jobs_var,
+            values=("1", "2"),
+            state="readonly",
+            width=4,
+        )
+        jobs_box.grid(row=0, column=8, padx=4, sticky=tk.W)
+        self._tooltip(
+            jobs_box,
+            "Use 2 for better total CPU utilization on SD x265 queues. Use 1 when RAM is limited or for a single episode.",
+        )
+
+        ttk.Label(options, text="Manual crop L:T:R:B:").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
+        self.crop_var = tk.StringVar()
+        crop_entry = ttk.Entry(options, textvariable=self.crop_var, width=13)
+        crop_entry.grid(row=1, column=1, padx=4, sticky=tk.W, pady=(8, 0))
+        self._tooltip(
+            crop_entry,
+            "Even left:top:right:bottom margins. Manual values override auto-crop and preserve the original display aspect ratio.",
+        )
+        self.auto_crop_var = tk.BooleanVar(value=False)
+        auto_crop = ttk.Checkbutton(options, text="Auto crop", variable=self.auto_crop_var)
+        auto_crop.grid(row=1, column=2, columnspan=2, padx=10, pady=(8, 0), sticky=tk.W)
+        self._tooltip(
+            auto_crop,
+            "Remove only stable black borders found across seven samples. Disabled by default; preview before processing.",
+        )
+        self.denoise_var = tk.BooleanVar(value=False)
+        denoise = ttk.Checkbutton(options, text="Light denoise", variable=self.denoise_var)
+        denoise.grid(row=1, column=4, padx=10, pady=(8, 0), sticky=tk.W)
+        self._tooltip(
+            denoise,
+            "Apply a mild hqdn3d pass. It can improve compression but may remove texture, so it stays off by default.",
+        )
+        self.dotcrawl_var = tk.BooleanVar(value=False)
+        dotcrawl = ttk.Checkbutton(
+            options,
+            text="Dot crawl / rainbow cleanup",
+            variable=self.dotcrawl_var,
+        )
+        dotcrawl.grid(row=1, column=5, columnspan=3, padx=10, pady=(8, 0), sticky=tk.W)
+        self._tooltip(
+            dotcrawl,
+            "Apply one conservative spatial DotKillS pass after field reconstruction. Useful for composite-video artifacts; never automatic and always preview first.",
+        )
+
+        ttk.Label(options, text="Output (blank = _fixed):").grid(
+            row=2, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        self.output_var = tk.StringVar()
+        output_entry = ttk.Entry(options, textvariable=self.output_var)
+        output_entry.grid(
+            row=2, column=1, columnspan=7, sticky=tk.EW, padx=4, pady=(8, 0)
+        )
+        self._tooltip(
+            output_entry,
+            "Destination for every episode in this queue. Blank creates a _fixed folder beside each source.",
+        )
+        browse_output = ttk.Button(options, text="Browse…", command=self._choose_output)
+        browse_output.grid(row=2, column=8, pady=(8, 0))
+        self._tooltip(browse_output, "Choose a common destination folder for this series.")
+        options.columnconfigure(7, weight=1)
 
         actions = ttk.Frame(self, padding=(10, 6))
         actions.pack(fill=tk.X)
         self.analyze_button = ttk.Button(actions, text="Analyze", command=self._start_analysis)
         self.analyze_button.pack(side=tk.LEFT, padx=3)
+        self._tooltip(self.analyze_button, "Inspect every selected file in full without creating video output.")
         self.preview_button = ttk.Button(actions, text="Preview", command=self._start_preview)
         self.preview_button.pack(side=tk.LEFT, padx=3)
+        self._tooltip(self.preview_button, "Generate an original/corrected comparison for one selected file.")
         self.process_button = ttk.Button(actions, text="Process", command=self._start_processing)
         self.process_button.pack(side=tk.LEFT, padx=3)
+        self._tooltip(self.process_button, "Process selected files, validate them fully, and never overwrite the sources.")
         self.cancel_button = ttk.Button(actions, text="Cancel", command=self._cancel, state=tk.DISABLED)
         self.cancel_button.pack(side=tk.LEFT, padx=12)
-        ttk.Button(actions, text="Open output", command=self._open_output).pack(side=tk.LEFT, padx=3)
+        self._tooltip(self.cancel_button, "Stop the active analysis or encode and remove its partial output.")
+        open_output = ttk.Button(actions, text="Open output", command=self._open_output)
+        open_output.pack(side=tk.LEFT, padx=3)
+        self._tooltip(open_output, "Open the selected file's completed output folder.")
         self.progress = ttk.Progressbar(actions, maximum=100)
         self.progress.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(20, 0))
+        self._tooltip(self.progress, "Overall progress across the selected queue.")
 
         self.status_var = tk.StringVar(
             value="Drag MKVs into the queue." if HAS_DND else "Add MKVs using the buttons above."
@@ -254,14 +424,83 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         if directory:
             self.output_var.set(directory)
 
+    def _codec_changed(self, _event: object = None) -> None:
+        if self.codec_var.get() == CodecProfile.FFV1.value:
+            self.crf_spin.configure(state=tk.DISABLED)
+        else:
+            self.crf_spin.configure(state=tk.NORMAL)
+
+    def _load_profile(self) -> None:
+        source = filedialog.askopenfilename(
+            title="Load series profile",
+            filetypes=[("DVD FieldFix series profile", "*.json"), ("All files", "*.*")],
+        )
+        if not source:
+            return
+        try:
+            profile = load_series_profile(source)
+        except FieldFixError as exc:
+            messagebox.showerror("Invalid series profile", str(exc))
+            return
+        config = profile.config
+        self.codec_var.set(config.codec.value)
+        self.crf_var.set(f"{config.crf:g}")
+        margins = config.crop
+        self.crop_var.set(
+            f"{margins.left}:{margins.top}:{margins.right}:{margins.bottom}"
+            if margins.enabled
+            else ""
+        )
+        self.auto_crop_var.set(config.auto_crop)
+        self.denoise_var.set(config.denoise)
+        self.dotcrawl_var.set(config.dotcrawl)
+        self.jobs_var.set(str(profile.parallel_jobs))
+        self.profile_var.set(f"Series profile: {profile.name}")
+        self._codec_changed()
+        self.status_var.set(f"Loaded series profile: {profile.name}")
+
+    def _save_profile(self) -> None:
+        try:
+            config = self._config()
+        except ValueError as exc:
+            messagebox.showerror("Invalid options", str(exc))
+            return
+        destination = filedialog.asksaveasfilename(
+            title="Save series profile",
+            defaultextension=".json",
+            filetypes=[("DVD FieldFix series profile", "*.json")],
+            initialfile="series-profile.json",
+        )
+        if not destination:
+            return
+        name = Path(destination).stem
+        try:
+            save_series_profile(destination, name, config, int(self.jobs_var.get()))
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Could not save series profile", str(exc))
+            return
+        self.profile_var.set(f"Series profile: {name}")
+        self.status_var.set(f"Saved series profile: {destination}")
+
+    def _about(self) -> None:
+        messagebox.showinfo(
+            "About DVD FieldFix",
+            f"DVD FieldFix {__version__}\n\n"
+            "Intelligent field reconstruction and conservative DVD restoration.\n\n"
+            "Feather icon: this is Tcl/Tk's built-in default window icon. "
+            "DVD FieldFix does not currently bundle or claim authorship of it.",
+        )
+
     def _config(self, mode: ProcessingMode = ProcessingMode.AUTO) -> JobConfig:
         return JobConfig(
             codec=CodecProfile(self.codec_var.get()),
+            crf=float(self.crf_var.get()),
             mode=mode,
             output_directory=self.output_var.get().strip() or None,
             crop=CropMargins.parse(self.crop_var.get().strip()),
             auto_crop=self.auto_crop_var.get(),
             denoise=self.denoise_var.get(),
+            dotcrawl=self.dotcrawl_var.get(),
         )
 
     def _start_analysis(self) -> None:
@@ -277,9 +516,20 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
                 raise CancelledError("Analysis cancelled")
             self._set_item_status(item, "Analyzing")
 
-            def callback(value: float, stage: str, current: int = index) -> None:
+            def callback(
+                value: float,
+                stage: str,
+                details: ProgressDetails | None = None,
+                current: int = index,
+            ) -> None:
                 overall = ((current - 1) + value) / len(items)
-                self.after(0, self._set_progress, overall, f"{item.path.name}: {stage}")
+                self.after(
+                    0,
+                    self._set_progress,
+                    overall,
+                    f"{item.path.name}: {stage}",
+                    details,
+                )
 
             item.analysis = analyze_file(
                 item.path,
@@ -300,21 +550,70 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         except ValueError as exc:
             messagebox.showerror("Invalid options", str(exc))
             return
-        self._run_worker(lambda: self._processing_worker(items, config))
+        jobs = int(self.jobs_var.get())
+        self._run_worker(lambda: self._processing_worker(items, config, jobs))
 
-    def _processing_worker(self, items: list[QueueItem], base_config: JobConfig) -> None:
-        for index, item in enumerate(items, 1):
+    def _processing_worker(
+        self,
+        items: list[QueueItem],
+        base_config: JobConfig,
+        jobs: int,
+    ) -> None:
+        missing = [item for item in items if item.analysis is None]
+        for index, item in enumerate(missing, 1):
             if self.cancel_event.is_set():
                 raise CancelledError("Processing cancelled")
-            if item.analysis is None:
-                self._set_item_status(item, "Analyzing")
-                item.analysis = analyze_file(item.path, self.tools, cancel_event=self.cancel_event)
+            self._set_item_status(item, "Analyzing")
+
+            def analysis_progress(
+                value: float,
+                stage: str,
+                details: ProgressDetails | None = None,
+                current: int = index,
+                current_item: QueueItem = item,
+            ) -> None:
+                overall = ((current - 1) + value) / max(1, len(missing))
+                self.after(
+                    0,
+                    self._set_progress,
+                    overall,
+                    f"{current_item.path.name}: {stage}",
+                    details,
+                )
+
+            item.analysis = analyze_file(
+                item.path,
+                self.tools,
+                cancel_event=self.cancel_event,
+                progress=analysis_progress,
+            )
+            self.after(0, self._refresh_item, item)
+
+        progress_values = {str(item.path): 0.0 for item in items}
+        progress_lock = threading.Lock()
+
+        def process_one(item: QueueItem) -> None:
+            if self.cancel_event.is_set():
+                raise CancelledError("Processing cancelled")
+            assert item.analysis is not None
             config = replace(base_config, mode=item.override)
             self._set_item_status(item, "Processing")
 
-            def callback(value: float, stage: str, current: int = index) -> None:
-                overall = ((current - 1) + value) / len(items)
-                self.after(0, self._set_progress, overall, f"{item.path.name}: {stage}")
+            def callback(
+                value: float,
+                stage: str,
+                details: ProgressDetails | None = None,
+            ) -> None:
+                with progress_lock:
+                    progress_values[str(item.path)] = value
+                    overall = sum(progress_values.values()) / len(items)
+                self.after(
+                    0,
+                    self._set_progress,
+                    overall,
+                    f"{item.path.name}: {stage}",
+                    details,
+                )
 
             result = process_file(
                 item.analysis,
@@ -325,7 +624,14 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             )
             item.output = Path(result.output)
             item.status = "Already completed" if result.skipped else "Completed and validated"
+            with progress_lock:
+                progress_values[str(item.path)] = 1.0
             self.after(0, self._refresh_item, item)
+
+        with ThreadPoolExecutor(max_workers=min(jobs, len(items))) as executor:
+            futures = [executor.submit(process_one, item) for item in items]
+            for future in as_completed(futures):
+                future.result()
 
     def _start_preview(self) -> None:
         selected = self._selected_items(require_one=True)
@@ -366,13 +672,13 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         window._images = (original_image, corrected_image)  # type: ignore[attr-defined]
 
     def _doctor(self) -> None:
-        self.status_var.set("Checking dependencies…")
+        self.status_var.set("Checking the processing setup…")
 
         def worker() -> None:
             report = self.tools.doctor(deep_qtgmc=True)
             lines = [f"{'OK' if check.ok else 'FAIL'} — {check.name}: {check.detail}" for check in report.checks]
-            self.after(0, messagebox.showinfo, "Doctor", "\n\n".join(lines))
-            self.after(0, self.status_var.set, "Doctor completed")
+            self.after(0, messagebox.showinfo, "Setup check", "\n\n".join(lines))
+            self.after(0, self.status_var.set, "Setup check completed")
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -446,14 +752,36 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         crop = item.analysis.crop_suggestion if item.analysis and item.analysis.crop_suggestion else "none"
         if item.override == ProcessingMode.AUTO and item.analysis and item.analysis.suggested_mode:
             action = item.analysis.suggested_mode.value
+            restoration_selected = bool(
+                self.crop_var.get().strip()
+                or self.auto_crop_var.get()
+                or self.denoise_var.get()
+                or self.dotcrawl_var.get()
+            )
+            if action == ProcessingMode.COPY.value and restoration_selected:
+                action = ProcessingMode.RESTORE.value
         self.tree.item(
             str(item.path),
             values=(item.path.name, classification, confidence, action, crop, item.status),
         )
 
-    def _set_progress(self, value: float, status: str) -> None:
+    def _set_progress(
+        self,
+        value: float,
+        status: str,
+        details: ProgressDetails | None = None,
+    ) -> None:
         self.progress.configure(value=max(0, min(100, value * 100)))
-        self.status_var.set(status)
+        metrics: list[str] = []
+        if details:
+            if details.current_frame is not None and details.total_frames is not None:
+                metrics.append(f"{details.current_frame:,} / {details.total_frames:,} frames")
+            if details.fps is not None:
+                metrics.append(f"{details.fps:.2f} fps")
+            if details.elapsed_seconds is not None:
+                metrics.append(f"elapsed {_clock(details.elapsed_seconds)}")
+                metrics.append(f"ETA {_clock(details.eta_seconds)}")
+        self.status_var.set(status + ("  •  " + "  •  ".join(metrics) if metrics else ""))
 
     def _busy(self, busy: bool) -> None:
         state = tk.DISABLED if busy else tk.NORMAL
@@ -488,6 +816,15 @@ def _set_dark_titlebar(window: tk.Misc) -> None:
                 break
     except (AttributeError, OSError, tk.TclError):
         pass
+
+
+def _clock(seconds: float | None) -> str:
+    if seconds is None:
+        return "--:--:--"
+    total = max(0, round(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def main() -> None:

@@ -22,4 +22,11 @@ def test_job_fingerprint_is_stable_and_sensitive() -> None:
     different = JobConfig(codec=CodecProfile.HEVC10, mode=ProcessingMode.AUTO)
     assert first.fingerprint() == same.fingerprint()
     assert first.fingerprint() != different.fingerprint()
+    assert first.fingerprint() != JobConfig(codec=CodecProfile.H264, crf=15).fingerprint()
+    assert first.fingerprint() != JobConfig(codec=CodecProfile.H264, dotcrawl=True).fingerprint()
 
+
+@pytest.mark.parametrize("crf", [-0.5, 51.5])
+def test_crf_rejects_out_of_range_values(crf: float) -> None:
+    with pytest.raises(ValueError):
+        JobConfig(crf=crf)

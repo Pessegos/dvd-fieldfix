@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from fractions import Fraction
 from pathlib import Path
@@ -30,7 +31,7 @@ from .tools import (
     AmbiguousSourceError,
     CancelledError,
     DependencyError,
-    DoctorReport,
+    FFmpegProgressState,
     OutputCollisionError,
     ProcessingError,
     ProgressCallback,
@@ -51,11 +52,16 @@ CLEAN_PAIR_YDIF_THRESHOLD = 0.75
 CLEAN_PAIR_REQUIRED_PERCENT = 98.0
 
 
-def resolve_mode(analysis: AnalysisResult, requested: ProcessingMode) -> ProcessingMode:
+def resolve_mode(
+    analysis: AnalysisResult,
+    requested: ProcessingMode,
+    *,
+    restoration: bool = False,
+) -> ProcessingMode:
     if requested != ProcessingMode.AUTO:
         return requested
     if analysis.classification == Classification.PROGRESSIVE:
-        return ProcessingMode.COPY
+        return ProcessingMode.RESTORE if restoration else ProcessingMode.COPY
     if analysis.classification == Classification.FIELD_MATCHABLE:
         return ProcessingMode.FIELDMATCH
     if analysis.classification == Classification.HYBRID:
@@ -69,7 +75,8 @@ def resolve_mode(analysis: AnalysisResult, requested: ProcessingMode) -> Process
     raise ProcessingError(f"Unsupported source: {analysis.reason}")
 
 
-def codec_arguments(profile: CodecProfile) -> list[str]:
+def codec_arguments(profile: CodecProfile, crf: float = 14.0) -> list[str]:
+    crf_text = f"{crf:g}"
     if profile == CodecProfile.H264:
         return [
             "-c:v",
@@ -77,11 +84,13 @@ def codec_arguments(profile: CodecProfile) -> list[str]:
             "-preset",
             "veryslow",
             "-crf",
-            "16",
+            crf_text,
             "-profile:v",
             "high",
             "-pix_fmt",
             "yuv420p",
+            "-x264-params",
+            "subme=11:merange=32:fast-pskip=0:dct-decimate=0",
         ]
     if profile == CodecProfile.HEVC10:
         return [
@@ -90,9 +99,11 @@ def codec_arguments(profile: CodecProfile) -> list[str]:
             "-preset",
             "veryslow",
             "-crf",
-            "18",
+            crf_text,
             "-pix_fmt",
             "yuv420p10le",
+            "-x265-params",
+            "rd-refine=1",
         ]
     if profile == CodecProfile.FFV1:
         return [
@@ -238,13 +249,20 @@ def process_file(
 ) -> ProcessingResult:
     tools = tools or Toolchain.discover()
     tools.require_analysis()
-    mode = resolve_mode(analysis, config.mode)
-    if mode in {ProcessingMode.FIELDMATCH, ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
+    mode = resolve_mode(analysis, config.mode, restoration=config.has_restoration)
+    if mode in {
+        ProcessingMode.RESTORE,
+        ProcessingMode.FIELDMATCH,
+        ProcessingMode.HYBRID50,
+        ProcessingMode.QTGMC,
+    }:
         tools.require_qtgmc()
         doctor = tools.doctor(deep_qtgmc=True)
         failed = [check.detail for check in doctor.checks if check.name == "QTGMC" and not check.ok]
         if failed:
             raise DependencyError("QTGMC unavailable: " + failed[0])
+    if config.dotcrawl and mode != ProcessingMode.COPY:
+        tools.require_dotkill()
     source = Path(analysis.media.path)
     output_directory = Path(config.output_directory).expanduser().resolve() if config.output_directory else source.parent / "_fixed"
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -264,7 +282,7 @@ def process_file(
     work.mkdir(parents=True, exist_ok=False)
     try:
         if progress:
-            progress(0.0, "Preparing output")
+            progress(0.0, "Preparing output", None)
         if mode == ProcessingMode.COPY:
             shutil.copy2(source, partial)
             copied_hash = sha256_file(partial)
@@ -289,6 +307,12 @@ def process_file(
                 messages=["Byte-for-byte copy confirmed by SHA-256"],
             )
             action = "copy"
+        elif mode == ProcessingMode.RESTORE:
+            _encode_restore(analysis, config, tools, partial, work, cancel_event, progress)
+            validation = validate_output(
+                analysis, partial, tools, mode=mode, cancel_event=cancel_event, progress=progress
+            )
+            action = "restore"
         elif mode == ProcessingMode.FIELDMATCH:
             _encode_fieldmatch(analysis, config, tools, partial, work, cancel_event, progress)
             validation = validate_output(
@@ -330,7 +354,7 @@ def process_file(
         }
         json_dump_atomic(manifest, document)
         if progress:
-            progress(1.0, "Completed")
+            progress(1.0, "Completed", None)
         return ProcessingResult(
             source=str(source),
             output=str(output),
@@ -396,11 +420,33 @@ def _encode_fieldmatch(
             cache,
             tff,
             decimate=analysis.cadence == "3:2",
+            dotcrawl=config.dotcrawl,
         ),
         encoding="utf-8",
     )
     _encode_vapoursynth(
-        analysis, config, tools, partial, script, cancel_event, progress
+        analysis, config, tools, partial, script, ProcessingMode.FIELDMATCH, cancel_event, progress
+    )
+
+
+def _encode_restore(
+    analysis: AnalysisResult,
+    config: JobConfig,
+    tools: Toolchain,
+    partial: Path,
+    work: Path,
+    cancel_event: threading.Event | None,
+    progress: ProgressCallback | None,
+) -> None:
+    assert tools.ffmpeg and tools.vspipe
+    script = work / "restore.vpy"
+    cache = work / "bestsource.bsindex"
+    script.write_text(
+        _progressive_script(analysis.media.path, cache, dotcrawl=config.dotcrawl),
+        encoding="utf-8",
+    )
+    _encode_vapoursynth(
+        analysis, config, tools, partial, script, ProcessingMode.RESTORE, cancel_event, progress
     )
 
 
@@ -445,9 +491,12 @@ def _encode_qtgmc(
     script = work / "qtgmc.vpy"
     cache = work / "bestsource.bsindex"
     tff = (analysis.field_order or "tff") == "tff"
-    script.write_text(_qtgmc_script(analysis.media.path, cache, tff), encoding="utf-8")
+    script.write_text(
+        _qtgmc_script(analysis.media.path, cache, tff, dotcrawl=config.dotcrawl),
+        encoding="utf-8",
+    )
     _encode_vapoursynth(
-        analysis, config, tools, partial, script, cancel_event, progress
+        analysis, config, tools, partial, script, ProcessingMode.QTGMC, cancel_event, progress
     )
 
 
@@ -474,11 +523,13 @@ def _encode_hybrid(
     if not ranges:
         raise ProcessingError("hybrid50 requires at least one confirmed 50i segment")
     script.write_text(
-        _hybrid_script(analysis.media.path, cache, tff, fps, ranges),
+        _hybrid_script(
+            analysis.media.path, cache, tff, fps, ranges, dotcrawl=config.dotcrawl
+        ),
         encoding="utf-8",
     )
     _encode_vapoursynth(
-        analysis, config, tools, partial, script, cancel_event, progress
+        analysis, config, tools, partial, script, ProcessingMode.HYBRID50, cancel_event, progress
     )
 
 
@@ -488,6 +539,7 @@ def _encode_vapoursynth(
     tools: Toolchain,
     partial: Path,
     script: Path,
+    mode: ProcessingMode,
     cancel_event: threading.Event | None,
     progress: ProgressCallback | None,
 ) -> None:
@@ -507,7 +559,7 @@ def _encode_vapoursynth(
     post_filters = restoration_filters(analysis, config)
     post_filters.append("setfield=prog")
     ffmpeg_command.extend(["-vf", ",".join(post_filters)])
-    ffmpeg_command.extend(codec_arguments(config.codec))
+    ffmpeg_command.extend(codec_arguments(config.codec, config.crf))
     ffmpeg_command.extend(color_arguments(analysis))
     ffmpeg_command.extend(_copy_nonvideo_arguments())
     ffmpeg_command.extend(_video_metadata_arguments(analysis))
@@ -518,6 +570,7 @@ def _encode_vapoursynth(
         vspipe_command,
         ffmpeg_command,
         analysis.media.duration,
+        _expected_output_frames(analysis, mode),
         cancel_event,
         progress,
     )
@@ -536,8 +589,37 @@ def _source_maps_for_qtgmc() -> list[str]:
     ]
 
 
-def _fieldmatch_script(source: str, cache: Path, tff: bool, *, decimate: bool) -> str:
+def _progressive_script(source: str, cache: Path, *, dotcrawl: bool = False) -> str:
+    dotcrawl_line = (
+        "output = core.dotkill.DotKillS(output, iterations=1)" if dotcrawl else ""
+    )
+    return f"""\
+import vapoursynth as vs
+from vapoursynth import core
+
+SOURCE = {source!r}
+CACHE = {str(cache)!r}
+
+output = core.bs.VideoSource(source=SOURCE, cachepath=CACHE)
+output = core.std.SetFrameProps(output, _FieldBased=0)
+{dotcrawl_line}
+output = core.std.SetFrameProps(output, _FieldBased=0)
+output.set_output()
+"""
+
+
+def _fieldmatch_script(
+    source: str,
+    cache: Path,
+    tff: bool,
+    *,
+    decimate: bool,
+    dotcrawl: bool = False,
+) -> str:
     order = 1 if tff else 0
+    dotcrawl_line = (
+        "output = core.dotkill.DotKillS(output, iterations=1)" if dotcrawl else ""
+    )
     decimate_line = "output = core.vivtc.VDecimate(output)" if decimate else ""
     return f"""\
 import vapoursynth as vs
@@ -575,13 +657,23 @@ output = core.std.FrameEval(
     prop_src=matched,
     clip_src=[matched, fallback],
 )
+{dotcrawl_line}
 {decimate_line}
 output = core.std.SetFrameProps(output, _FieldBased=0)
 output.set_output()
 """
 
 
-def _qtgmc_script(source: str, cache: Path, tff: bool) -> str:
+def _qtgmc_script(
+    source: str,
+    cache: Path,
+    tff: bool,
+    *,
+    dotcrawl: bool = False,
+) -> str:
+    dotcrawl_line = (
+        "output = core.dotkill.DotKillS(output, iterations=1)" if dotcrawl else ""
+    )
     return f"""\
 import vapoursynth as vs
 from vapoursynth import core
@@ -594,9 +686,11 @@ clip = core.std.SetFrameProps(clip, _FieldBased={2 if tff else 1})
 qtgmc = QTempGaussMC().source_match(
     mode=QTempGaussMC.SourceMatchMode.BASIC
 ).sharpen(strength=0)
-clip = qtgmc.bob(clip, tff={tff!r})
-clip = core.std.SetFrameProps(clip, _FieldBased=0)
-clip.set_output()
+output = qtgmc.bob(clip, tff={tff!r})
+output = core.std.SetFrameProps(output, _FieldBased=0)
+{dotcrawl_line}
+output = core.std.SetFrameProps(output, _FieldBased=0)
+output.set_output()
 """
 
 
@@ -622,8 +716,13 @@ def _hybrid_script(
     tff: bool,
     fps: float,
     ranges: list[tuple[int, int]],
+    *,
+    dotcrawl: bool = False,
 ) -> str:
     order = 1 if tff else 0
+    dotcrawl_line = (
+        "output = core.dotkill.DotKillS(output, iterations=1)" if dotcrawl else ""
+    )
     return f"""\
 import vapoursynth as vs
 from vapoursynth import core
@@ -665,6 +764,7 @@ output = core.std.FrameEval(
     prop_src=matched50,
     clip_src=[matched50, bobbed50],
 )
+{dotcrawl_line}
 output = core.std.SetFrameProps(output, _FieldBased=0)
 output.set_output()
 """
@@ -674,9 +774,12 @@ def _run_pipeline_progress(
     producer_command: list[str],
     consumer_command: list[str],
     duration: float,
+    total_frames: int | None,
     cancel_event: threading.Event | None,
     progress: ProgressCallback | None,
 ) -> None:
+    started = time.monotonic()
+    state = FFmpegProgressState()
     producer = subprocess.Popen(
         producer_command,
         stdout=subprocess.PIPE,
@@ -710,10 +813,15 @@ def _run_pipeline_progress(
         if cancel_event and cancel_event.is_set():
             terminate_process_tree(consumer)
             terminate_process_tree(producer)
-            raise CancelledError("QTGMC encoding cancelled")
+            raise CancelledError("Encoding cancelled")
+        state.feed(line)
         value = parse_ffmpeg_progress_line(line, duration)
         if value is not None and progress:
-            progress(value * 0.82, "QTGMC and encoding")
+            progress(
+                value * 0.82,
+                "Filtering and encoding",
+                state.details(total_frames, time.monotonic() - started),
+            )
     consumer_return = consumer.wait()
     producer_return = producer.wait()
     producer_thread.join(timeout=5)
@@ -794,6 +902,9 @@ def _scan_temporal_cadence(
     current_frame: int | None = None
     error_lines: list[str] = []
     hybrid_ranges = _hybrid_frame_ranges(analysis) if mode == ProcessingMode.HYBRID50 else []
+    expected_frames = _expected_output_frames(analysis, mode)
+    started = time.monotonic()
+    state = FFmpegProgressState()
 
     def read_metadata() -> None:
         nonlocal current_frame, decoded_frames, clean_pairs, matched_clean_pairs
@@ -827,9 +938,14 @@ def _scan_temporal_cadence(
             terminate_process_tree(process)
             thread.join(timeout=2)
             raise CancelledError("Temporal validation cancelled")
+        state.feed(line)
         value = parse_ffmpeg_progress_line(line, output_media.duration)
         if value is not None and progress:
-            progress(0.94 + value * 0.04, "Validating temporal cadence")
+            progress(
+                0.94 + value * 0.04,
+                "Validating temporal cadence",
+                state.details(expected_frames, time.monotonic() - started),
+            )
     returncode = process.wait()
     thread.join(timeout=5)
     if returncode:
@@ -850,7 +966,7 @@ def validate_output(
     assert tools.ffmpeg
     result = ValidationResult(valid=False)
     if progress:
-        progress(0.83, "Validating structure")
+        progress(0.83, "Validating structure", None)
     output_media = probe_media(path, tools)
     result.expected_fps = _expected_output_fps(analysis, mode)
     output_video = output_media.video
@@ -924,7 +1040,7 @@ def validate_output(
     if not result.decoded_without_errors:
         result.messages.append("Full decoding found errors: " + errors[-500:])
     if progress:
-        progress(0.90, "Checking for residual combing")
+        progress(0.90, "Checking for residual combing", None)
     residual_frames, residual_percent, _ = scan_fieldmatch_residual(
         output_media,
         tools,
@@ -939,7 +1055,7 @@ def validate_output(
             f"({residual_frames} frames) or field_order={field_flag}"
         )
     if progress:
-        progress(0.94, "Validating temporal cadence")
+        progress(0.94, "Validating temporal cadence", None)
     result.expected_frames = _expected_output_frames(analysis, mode)
     result.decoded_frames, result.clean_pair_match_percent = _scan_temporal_cadence(
         analysis,
@@ -983,7 +1099,7 @@ def validate_output(
             "Duration, streams, decoding, frame count, cadence, frame rate, aspect ratio and progressiveness validated"
         )
     if progress:
-        progress(0.99, "Validation completed")
+        progress(0.99, "Validation completed", None)
     return result
 
 

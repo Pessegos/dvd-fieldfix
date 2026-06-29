@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from collections import Counter, defaultdict
 from fractions import Fraction
 from pathlib import Path
@@ -25,7 +26,9 @@ from .models import (
 from .tools import (
     AnalysisError,
     CancelledError,
+    FFmpegProgressState,
     ProgressCallback,
+    ProgressDetails,
     Toolchain,
     json_dump_atomic,
     parse_ffmpeg_progress_line,
@@ -199,6 +202,7 @@ def scan_idet(
     stats = IDetStats()
     last_lines: list[str] = []
     expected_frames = max(1, round(media.duration * (parse_rate(media.video.average_frame_rate) or 25))) if media.video else 1
+    started = time.monotonic()
     assert process.stderr
     try:
         for line in process.stderr:
@@ -213,7 +217,24 @@ def scan_idet(
                 current_time = float(frame_match.group(2))
                 frame_number = int(frame_match.group(1))
                 if progress and frame_number % 250 == 0:
-                    progress(min(0.98, frame_number / expected_frames), "Measuring fields")
+                    elapsed = time.monotonic() - started
+                    measured_fps = frame_number / elapsed if elapsed > 0 else None
+                    eta = (
+                        max(0, expected_frames - frame_number) / measured_fps
+                        if measured_fps
+                        else None
+                    )
+                    progress(
+                        min(0.98, frame_number / expected_frames),
+                        "Measuring fields",
+                        ProgressDetails(
+                            current_frame=frame_number,
+                            total_frames=expected_frames,
+                            fps=measured_fps,
+                            elapsed_seconds=elapsed,
+                            eta_seconds=eta,
+                        ),
+                    )
                 continue
             class_match = METADATA_CLASS_RE.search(line)
             if class_match and current_time is not None:
@@ -233,7 +254,16 @@ def scan_idet(
     if process.returncode:
         raise AnalysisError("IDet failed:\n" + "\n".join(last_lines[-15:]))
     if progress:
-        progress(1.0, "IDet completed")
+        progress(
+            1.0,
+            "IDet completed",
+            ProgressDetails(
+                current_frame=stats.frames,
+                total_frames=expected_frames,
+                elapsed_seconds=time.monotonic() - started,
+                eta_seconds=0.0,
+            ),
+        )
     return stats, _segments_from_bins(bins, media.duration)
 
 
@@ -297,6 +327,15 @@ def scan_fieldmatch_residual(
     residual = 0
     residual_bins: Counter[int] = Counter()
     error_lines: list[str] = []
+    expected_frames = max(
+        1,
+        round(
+            media.duration
+            * ((parse_rate(media.video.average_frame_rate) or 25.0) if media.video else 25.0)
+        ),
+    )
+    started = time.monotonic()
+    state = FFmpegProgressState()
 
     def read_errors() -> None:
         nonlocal residual
@@ -323,9 +362,14 @@ def scan_fieldmatch_residual(
             terminate_process_tree(process)
             thread.join(timeout=2)
             raise CancelledError("Analysis cancelled")
+        state.feed(line)
         value = parse_ffmpeg_progress_line(line, media.duration)
         if value is not None and progress:
-            progress(value, "Testing field reconstruction")
+            progress(
+                value,
+                "Testing field reconstruction",
+                state.details(expected_frames, time.monotonic() - started),
+            )
     returncode = process.wait()
     thread.join(timeout=5)
     if returncode:
@@ -507,7 +551,7 @@ def analyze_file(
     if not fps:
         return AnalysisResult(media, Classification.UNSUPPORTED, 1.0, "Could not determine the frame rate")
     if progress:
-        progress(0.0, "Analyzing with IDet")
+        progress(0.0, "Analyzing with IDet", None)
     idet, segments = scan_idet(media, tools, cancel_event=cancel_event, progress=progress)
     crop = detect_crop(media, tools)
     base = dict(
@@ -547,7 +591,7 @@ def analyze_file(
             **base,
         )
     if progress:
-        progress(0.0, "Testing field matching")
+        progress(0.0, "Testing field matching", None)
     residual_frames, residual_percent, residual_segments = scan_fieldmatch_residual(
         media,
         tools,

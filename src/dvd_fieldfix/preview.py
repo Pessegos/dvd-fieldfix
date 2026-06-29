@@ -12,6 +12,7 @@ from .processing import (
     _fieldmatch_script,
     _hybrid_frame_ranges,
     _hybrid_script,
+    _progressive_script,
     _qtgmc_script,
     resolve_mode,
     restoration_filters,
@@ -44,11 +45,18 @@ def generate_preview(
     corrected_png = destination / "corrected.png"
     timestamp = preview_timestamp(analysis)
     _extract_source_frame(tools.ffmpeg, analysis.media.path, timestamp, source_png)
-    mode = resolve_mode(analysis, config.mode)
+    mode = resolve_mode(analysis, config.mode, restoration=config.has_restoration)
     if mode == ProcessingMode.COPY:
         shutil.copy2(source_png, corrected_png)
-    elif mode in {ProcessingMode.FIELDMATCH, ProcessingMode.HYBRID50, ProcessingMode.QTGMC}:
+    elif mode in {
+        ProcessingMode.RESTORE,
+        ProcessingMode.FIELDMATCH,
+        ProcessingMode.HYBRID50,
+        ProcessingMode.QTGMC,
+    }:
         tools.require_qtgmc()
+        if config.dotcrawl:
+            tools.require_dotkill()
         assert tools.vspipe
         _extract_vapoursynth_frame(
             tools, analysis, config, mode, timestamp, destination, corrected_png
@@ -94,22 +102,35 @@ def _extract_vapoursynth_frame(
     cache = directory / "preview.bsindex"
     tff = (analysis.field_order or "tff") == "tff"
     fps = parse_rate(analysis.media.video.average_frame_rate) if analysis.media.video else 25.0
-    if mode == ProcessingMode.FIELDMATCH:
+    if mode == ProcessingMode.RESTORE:
+        script_text = _progressive_script(
+            analysis.media.path, cache, dotcrawl=config.dotcrawl
+        )
+        output_fps = fps or 25.0
+    elif mode == ProcessingMode.FIELDMATCH:
         script_text = _fieldmatch_script(
             analysis.media.path,
             cache,
             tff,
             decimate=analysis.cadence == "3:2",
+            dotcrawl=config.dotcrawl,
         )
         output_fps = 24000 / 1001 if analysis.cadence == "3:2" else fps or 25.0
     elif mode == ProcessingMode.HYBRID50:
         ranges = _hybrid_frame_ranges(analysis)
         script_text = _hybrid_script(
-            analysis.media.path, cache, tff, fps or 25.0, ranges
+            analysis.media.path,
+            cache,
+            tff,
+            fps or 25.0,
+            ranges,
+            dotcrawl=config.dotcrawl,
         )
         output_fps = (fps or 25.0) * 2
     else:
-        script_text = _qtgmc_script(analysis.media.path, cache, tff)
+        script_text = _qtgmc_script(
+            analysis.media.path, cache, tff, dotcrawl=config.dotcrawl
+        )
         output_fps = (fps or 25.0) * 2
     script.write_text(
         script_text,

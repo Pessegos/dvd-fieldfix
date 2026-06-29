@@ -13,7 +13,7 @@ DVD FieldFix analyzes MKV files sourced from DVDs and applies the least destruct
 - hybrid PAL uses VFM for the 25p body and QTGMC for confirmed 50i segments, producing progressive 50p;
 - true interlaced video uses VapourSynth/QTGMC at 50p or 59.94p;
 - hybrid NTSC and contradictory results stop for manual review rather than risk an incorrect cadence;
-- the dark-mode GUI provides drag-and-drop, preview, queue management and conservative opt-in auto-crop.
+- the dark-mode GUI provides drag-and-drop, tooltips, reusable series profiles, detailed encoding progress and conservative opt-in restoration.
 
 Original files are never overwritten. Outputs are written to a `_fixed` subfolder by default, created as `.partial.mkv`, fully validated, and only then renamed atomically.
 
@@ -73,19 +73,27 @@ More examples:
 dvd-fieldfix process episode.mkv --codec hevc10 --mode fieldmatch
 dvd-fieldfix process episode.mkv --codec hevc10 --mode hybrid50
 dvd-fieldfix process episode.mkv --codec ffv1 --mode qtgmc
+dvd-fieldfix process episode.mkv --codec h264 --crf 14
 dvd-fieldfix process episode.mkv --crop 8:0:8:0 --denoise light
+dvd-fieldfix process episode.mkv --dotcrawl
 dvd-fieldfix process episode.mkv --auto-crop
 ```
 
 Auto-crop samples seven positions across the episode and removes only borders that every valid sample considers outside the active image. It is disabled by default. A manual `L:T:R:B` crop always takes priority.
 
-## Video profiles
+## Series and video profiles
 
-- `h264`: x264 CRF 16, `veryslow`, High profile, 8-bit `yuv420p`;
-- `hevc10`: x265 CRF 18, `veryslow`, 10-bit `yuv420p10le`;
+- `h264`: x264 CRF 14, `veryslow`, High profile, 8-bit `yuv420p`, extended detail search;
+- `hevc10`: x265 CRF 14, `veryslow`, 10-bit `yuv420p10le`, RD refinement;
 - `ffv1`: lossless FFV1 level 3.
 
 Audio, subtitles, chapters, attachments, languages and dispositions are copied without re-encoding.
+
+The GUI saves codec, CRF, crop, cleanup and parallel-job choices as a reusable JSON profile so one series remains consistent. `tune=animation` is not applied automatically. See [Encoding profiles and quality decisions](docs/ENCODING_PROFILES.md) for the complete settings, CRF versus two-pass/lossless guidance, CPU benchmarks and the reasons behind each conservative override.
+
+The status line reports current/total frames, encoding FPS, elapsed time and ETA. Two parallel jobs can improve total HEVC throughput on SD material; one remains the memory-conservative default.
+
+Dot-crawl/rainbow cleanup uses one optional spatial DotKillS pass after field reconstruction. It is off by default and should be previewed. Cadence-dependent temporal variants are not selected automatically.
 
 ## Temporal pipeline
 

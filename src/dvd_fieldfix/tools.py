@@ -42,6 +42,57 @@ class CancelledError(ProcessingError):
 
 
 @dataclass(slots=True)
+class ProgressDetails:
+    current_frame: int | None = None
+    total_frames: int | None = None
+    fps: float | None = None
+    elapsed_seconds: float | None = None
+    eta_seconds: float | None = None
+    speed: float | None = None
+
+
+@dataclass(slots=True)
+class FFmpegProgressState:
+    frame: int | None = None
+    fps: float | None = None
+    speed: float | None = None
+
+    def feed(self, line: str) -> None:
+        key, separator, raw = line.strip().partition("=")
+        if not separator:
+            return
+        try:
+            if key == "frame":
+                self.frame = int(raw)
+            elif key == "fps":
+                self.fps = float(raw)
+            elif key == "speed":
+                self.speed = float(raw.rstrip("x"))
+        except ValueError:
+            return
+
+    def details(
+        self,
+        total_frames: int | None,
+        elapsed_seconds: float,
+    ) -> ProgressDetails:
+        measured_fps = self.fps
+        if (not measured_fps or measured_fps <= 0) and self.frame and elapsed_seconds > 0:
+            measured_fps = self.frame / elapsed_seconds
+        eta = None
+        if total_frames and self.frame is not None and measured_fps and measured_fps > 0:
+            eta = max(0.0, total_frames - self.frame) / measured_fps
+        return ProgressDetails(
+            current_frame=self.frame,
+            total_frames=total_frames,
+            fps=measured_fps,
+            elapsed_seconds=elapsed_seconds,
+            eta_seconds=eta,
+            speed=self.speed,
+        )
+
+
+@dataclass(slots=True)
 class DoctorCheck:
     name: str
     ok: bool
@@ -131,6 +182,14 @@ class Toolchain:
                 "VapourSynth/QTGMC is not installed. Run setup_qtgmc.ps1, then run doctor again."
             )
 
+    def require_dotkill(self) -> None:
+        self.require_qtgmc()
+        ok, detail = self._test_dotkill()
+        if not ok:
+            raise DependencyError(
+                "Dot-crawl cleanup is unavailable: " + detail + ". Run setup_qtgmc.ps1 again."
+            )
+
     def doctor(self, deep_qtgmc: bool = True) -> DoctorReport:
         report = DoctorReport()
         report.checks.append(
@@ -176,6 +235,10 @@ class Toolchain:
         if self.vspipe and deep_qtgmc:
             ok, detail = self._test_qtgmc()
             report.checks.append(DoctorCheck("QTGMC", ok, detail, False, True))
+            dotkill_ok, dotkill_detail = self._test_dotkill()
+            report.checks.append(
+                DoctorCheck("DotKill (optional)", dotkill_ok, dotkill_detail, False, False)
+            )
         return report
 
     def _test_qtgmc(self) -> tuple[bool, str]:
@@ -229,6 +292,23 @@ core.vivtc.VDecimate(fieldmatched).set_output(2)
         tail = "\n".join(combined.splitlines()[-5:])
         codes = ", ".join(str(result.returncode) for result in results)
         return False, tail or f"vspipe exited with codes {codes}"
+
+    def _test_dotkill(self) -> tuple[bool, str]:
+        assert self.vspipe
+        script = """\
+import vapoursynth as vs
+from vapoursynth import core
+clip = core.std.BlankClip(width=720, height=576, format=vs.YUV420P8, length=2)
+core.dotkill.DotKillS(clip, iterations=1).set_output()
+"""
+        with tempfile.TemporaryDirectory(prefix="dvd-fieldfix-dotkill-") as directory:
+            path = Path(directory) / "dotkill.vpy"
+            path.write_text(script, encoding="utf-8")
+            result = run_capture([self.vspipe, str(path), "--"], check=False, timeout=60)
+        if result.returncode == 0:
+            return True, "DotKillS spatial cleanup loaded"
+        tail = "\n".join((result.stdout + "\n" + result.stderr).strip().splitlines()[-5:])
+        return False, tail or f"vspipe exited with code {result.returncode}"
 
 
 @dataclass(slots=True)
@@ -312,7 +392,7 @@ def json_dump_atomic(path: Path, document: object) -> None:
     os.replace(temporary, path)
 
 
-ProgressCallback = Callable[[float, str], None]
+ProgressCallback = Callable[[float, str, ProgressDetails | None], None]
 
 
 def parse_ffmpeg_progress_line(line: str, duration: float) -> float | None:
