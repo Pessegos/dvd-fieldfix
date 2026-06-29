@@ -8,8 +8,8 @@ build/
 dist/
 *.spec
 .runtime/
+.history/
 _fixed/
 .fieldfix-work-*/
 *.partial.mkv
-
-.history/src/dvd_fieldfix/todo_20260627022324.txt
+*.bsindex

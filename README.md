@@ -1,5 +1,11 @@
 # DVD FieldFix
 
+[![Build](https://github.com/Pessegos/dvd-fieldfix/actions/workflows/build-release.yml/badge.svg)](https://github.com/Pessegos/dvd-fieldfix/actions/workflows/build-release.yml)
+[![Latest release](https://img.shields.io/github/v/release/Pessegos/dvd-fieldfix)](https://github.com/Pessegos/dvd-fieldfix/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+> Intelligent field reconstruction, hybrid deinterlacing and archival encoding for DVD sources.
+
 DVD FieldFix analisa MKVs provenientes de DVD e aplica o tratamento menos destrutivo possível:
 
 - vídeo progressivo é copiado byte a byte;
@@ -10,6 +16,10 @@ DVD FieldFix analisa MKVs provenientes de DVD e aplica o tratamento menos destru
 - a GUI usa tema escuro e disponibiliza auto-crop conservador, desligado por defeito.
 
 Os originais nunca são substituídos. Por defeito, as saídas ficam numa subpasta `_fixed`, são escritas primeiro como `.partial.mkv` e só recebem o nome final após validação integral.
+
+## Download
+
+A versão Windows pronta a executar, acompanhada por checksum SHA-256, está disponível em [GitHub Releases](https://github.com/Pessegos/dvd-fieldfix/releases/latest). Depois de extrair o ZIP, execute `setup_qtgmc.ps1` uma vez para instalar o runtime VapourSynth/QTGMC portátil e isolado.
 
 ## Instalação para desenvolvimento
 
