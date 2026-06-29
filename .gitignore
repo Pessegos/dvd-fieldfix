@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.spec
+.runtime/
+_fixed/
+.fieldfix-work-*/
+*.partial.mkv
+
+.history/src/dvd_fieldfix/todo_20260627022324.txt

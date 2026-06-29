@@ -1,0 +1,7 @@
+[x] fazer testes e depois perguntar se está bom
+
+[x] auto crop conservador dos lados/barras pretas
+
+[x] dark mode
+
+[ ] função de upscale com custom models
