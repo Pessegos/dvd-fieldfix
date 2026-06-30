@@ -25,6 +25,9 @@ from dvd_fieldfix.processing import (
     _hybrid_script,
     _progressive_script,
     _sar_after_crop,
+    color_arguments,
+    color_bitstream_arguments,
+    color_setparams_filter,
     codec_arguments,
     effective_crop,
     resolve_mode,
@@ -82,6 +85,58 @@ def test_codec_profiles() -> None:
     assert "subme=11:merange=32:fast-pskip=0:dct-decimate=0" in h264
     assert "rd-refine=1" in hevc10
     assert "ffv1" in codec_arguments(CodecProfile.FFV1)
+
+
+def test_pal_mpeg2_color_tags_use_encoder_compatible_transfer_name() -> None:
+    item = analysis()
+    assert item.media.video is not None
+    item.media.video.color_range = "tv"
+    item.media.video.color_space = "bt470bg"
+    item.media.video.color_transfer = "bt470bg"
+    item.media.video.color_primaries = "bt470bg"
+
+    args = color_arguments(item)
+
+    assert args[args.index("-colorspace") + 1] == "bt470bg"
+    assert args[args.index("-color_trc") + 1] == "gamma28"
+    assert args[args.index("-color_primaries") + 1] == "bt470bg"
+
+
+def test_missing_pal_color_components_are_filled_individually() -> None:
+    item = analysis()
+    assert item.media.video is not None
+    item.media.video.color_space = "bt470bg"
+    item.media.video.color_transfer = "unknown"
+    item.media.video.color_primaries = None
+
+    args = color_arguments(item)
+
+    assert args[args.index("-colorspace") + 1] == "bt470bg"
+    assert args[args.index("-color_trc") + 1] == "gamma28"
+    assert args[args.index("-color_primaries") + 1] == "bt470bg"
+
+
+def test_h264_color_metadata_is_written_into_the_bitstream() -> None:
+    item = analysis()
+    assert item.media.video is not None
+    item.media.video.color_range = "tv"
+    item.media.video.color_space = "bt470bg"
+    item.media.video.color_transfer = "bt470bg"
+    item.media.video.color_primaries = "bt470bg"
+
+    args = color_bitstream_arguments(item, CodecProfile.H264)
+
+    assert args[0] == "-bsf:v"
+    assert args[1].startswith("h264_metadata=")
+    assert "video_full_range_flag=0" in args[1]
+    assert "colour_primaries=5" in args[1]
+    assert "transfer_characteristics=5" in args[1]
+    assert "matrix_coefficients=5" in args[1]
+    assert color_bitstream_arguments(item, CodecProfile.FFV1) == []
+    assert color_setparams_filter(item) == (
+        "setparams=range=limited:color_primaries=bt470bg:"
+        "color_trc=bt470bg:colorspace=bt470bg"
+    )
 
 
 def test_fieldmatch_uses_conditional_qtgmc_without_yadif() -> None:

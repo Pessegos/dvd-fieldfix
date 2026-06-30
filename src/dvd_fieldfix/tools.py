@@ -200,7 +200,15 @@ class Toolchain:
         )
         if self.ffmpeg:
             filters = run_capture([self.ffmpeg, "-hide_banner", "-filters"], check=False).stdout
-            required_filters = ("idet", "fieldmatch", "setfield", "hqdn3d", "crop", "signalstats")
+            required_filters = (
+                "idet",
+                "fieldmatch",
+                "setfield",
+                "setparams",
+                "hqdn3d",
+                "crop",
+                "signalstats",
+            )
             absent = [item for item in required_filters if item not in filters]
             report.checks.append(
                 DoctorCheck(
@@ -219,6 +227,22 @@ class Toolchain:
                     "encoders",
                     not absent,
                     "libx264, libx265 and FFV1" if not absent else f"missing: {', '.join(absent)}",
+                    False,
+                    True,
+                )
+            )
+            bitstream_filters = run_capture(
+                [self.ffmpeg, "-hide_banner", "-bsfs"], check=False
+            ).stdout
+            required_bitstream_filters = ("h264_metadata", "hevc_metadata")
+            absent = [item for item in required_bitstream_filters if item not in bitstream_filters]
+            report.checks.append(
+                DoctorCheck(
+                    "colour metadata",
+                    not absent,
+                    "H.264/HEVC VUI writers available"
+                    if not absent
+                    else f"missing bitstream filters: {', '.join(absent)}",
                     False,
                     True,
                 )

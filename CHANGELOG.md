@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-06-30
+
+PAL colour-metadata and hybrid-validation fix.
+
+### Fixed
+
+- Normalize FFprobe's PAL `bt470bg` transfer tag to FFmpeg's encoder-compatible `gamma28` name instead of failing a QTGMC encode at the x264 output stage.
+- Attach colour properties to filtered frames and explicitly write H.264/HEVC VUI metadata, including FFV1/Matroska preservation; final validation now verifies range, matrix, transfer and primaries.
+- Calibrate lossy hybrid duplicate-pair validation so CRF quantization is not mistaken for temporal motion while retaining a strict 98% pass requirement.
+- Report filtering/encoding failures accurately instead of labeling every downstream encoder error as a QTGMC failure, and hide irrelevant legacy-plugin/indexing noise.
+
+### Changed
+
+- The main GUI action changes from `Analyze + Process` to `Process` when every file in the current selection has already been analyzed.
+- `Check setup` now verifies the H.264 and HEVC colour-metadata writers required by processing.
+- Bumped the processing fingerprint so outputs made without explicit colour preservation are never reused as current results.
+
 ## [0.4.0] - 2026-06-30
 
 Decision-transparency and preview-export release.
@@ -81,3 +98,4 @@ First public release.
 [0.2.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.2.0
 [0.3.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.3.0
 [0.4.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.4.0
+[0.4.1]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.4.1

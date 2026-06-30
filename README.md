@@ -55,7 +55,7 @@ Open the GUI:
 dvd-fieldfix gui
 ```
 
-`Analyze` is optional and is useful for inspecting classifications before committing to an encode. `Analyze + Process` always performs any missing analysis itself before choosing and validating the processing path.
+`Analyze` is optional and is useful for inspecting classifications before committing to an encode. The main button shows `Analyze + Process` while the current selection still needs analysis, then changes to `Process`. In either state it performs any missing analysis before choosing and validating the processing path.
 
 Analyze a folder:
 
@@ -128,6 +128,7 @@ Validation checks:
 - expected frame rate and progressive field flag;
 - residual combing;
 - SAR/DAR preservation.
+- colour range, matrix, transfer and primaries preservation.
 
 A completed output is skipped only when its source hash, pipeline version, configuration and output hash all match. Incompatible collisions are blocked.
 

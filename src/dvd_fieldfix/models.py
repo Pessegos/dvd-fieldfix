@@ -10,7 +10,7 @@ from typing import Any
 
 
 REPORT_SCHEMA_VERSION = 1
-PROCESSING_PIPELINE_VERSION = 6
+PROCESSING_PIPELINE_VERSION = 10
 
 
 class Classification(str, enum.Enum):
@@ -215,6 +215,9 @@ class ValidationResult:
     frame_count_valid: bool = False
     clean_pair_match_percent: float | None = None
     cadence_valid: bool = False
+    expected_color_tags: dict[str, str] = field(default_factory=dict)
+    output_color_tags: dict[str, str] = field(default_factory=dict)
+    color_tags_valid: bool = False
     messages: list[str] = field(default_factory=list)
 
 

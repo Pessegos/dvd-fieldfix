@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .models import AnalysisResult, CodecProfile, JobConfig, ProcessingMode, ProcessingResult
-from .processing import codec_arguments, effective_crop, resolve_mode
+from .processing import color_arguments, codec_arguments, effective_crop, resolve_mode
 
 
 @dataclass(slots=True)
@@ -85,7 +85,7 @@ def build_decision_summary(
         "",
         "Workflow",
         "-" * 8,
-        "Analyze is optional and exists for inspection. Analyze + Process always performs any missing analysis first.",
+        "Analyze is optional and exists for inspection. Process performs any missing analysis first; its label shows Analyze + Process when that work is pending.",
     ]
 
     for index, entry in enumerate(entries, 1):
@@ -97,7 +97,7 @@ def build_decision_summary(
                     f"Source: {entry.source}",
                     "Analysis: pending",
                     f"Queue status: {entry.status}",
-                    "Decision: Analyze + Process will analyze this file before choosing a temporal path.",
+                    "Decision: Process will analyze this file before choosing a temporal path.",
                 ]
             )
             continue
@@ -129,6 +129,7 @@ def build_decision_summary(
                 f"Color tags: range={video.color_range if video else None}, "
                 f"space={video.color_space if video else None}, transfer={video.color_transfer if video else None}, "
                 f"primaries={video.color_primaries if video else None}",
+                "Output color declaration: " + " ".join(color_arguments(analysis)),
                 f"Streams: video={media.count_streams('video')}, audio={media.count_streams('audio')}, "
                 f"subtitles={media.count_streams('subtitle')}, attachments={media.count_streams('attachment')}",
                 "",
@@ -177,8 +178,10 @@ def build_decision_summary(
                         f"Progressive output: {validation.progressive_output}",
                         f"Streams preserved: {validation.streams_preserved}",
                         f"Aspect ratio preserved: {validation.aspect_ratio_valid}",
-                        f"Temporal cadence valid: {validation.cadence_valid}",
-                        f"Validation messages: {'; '.join(validation.messages)}",
+                    f"Temporal cadence valid: {validation.cadence_valid}",
+                    f"Color tags preserved: {validation.color_tags_valid} "
+                    f"(output {validation.output_color_tags}, expected {validation.expected_color_tags})",
+                    f"Validation messages: {'; '.join(validation.messages)}",
                     ]
                 )
 

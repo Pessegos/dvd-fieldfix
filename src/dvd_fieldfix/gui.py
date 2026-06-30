@@ -107,6 +107,11 @@ class QueueItem:
     result: ProcessingResult | None = None
 
 
+def process_button_text(items: list[QueueItem]) -> str:
+    """Describe whether the current processing scope still needs analysis."""
+    return "Process" if items and all(item.analysis is not None for item in items) else "Analyze + Process"
+
+
 class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
     def __init__(self) -> None:
         super().__init__()
@@ -260,6 +265,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             self.tree.heading(column, text=headings[column])
             self.tree.column(column, width=widths[column], anchor=tk.W)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        self.tree.bind("<<TreeviewSelect>>", self._update_process_button_label, add="+")
         if HAS_DND and DND_FILES:
             self.tree.drop_target_register(DND_FILES)
             self.tree.dnd_bind("<<Drop>>", self._drop_files)
@@ -439,18 +445,24 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
                 continue
             self.items[key] = QueueItem(path)
             self.tree.insert("", tk.END, iid=key, values=(path.name, "—", "—", "auto", "—", "Not analyzed"))
+        self._update_process_button_label()
         self.status_var.set(f"{len(self.items)} file(s) in the queue")
 
     def _remove_selected(self) -> None:
         for key in self.tree.selection():
             self.tree.delete(key)
             self.items.pop(key, None)
+        self._update_process_button_label()
 
     def _selected_items(self, require_one: bool = False) -> list[QueueItem]:
         keys = list(self.tree.selection())
         if not keys and not require_one:
             keys = list(self.items)
         return [self.items[key] for key in keys if key in self.items]
+
+    def _update_process_button_label(self, _event: object = None) -> None:
+        if hasattr(self, "process_button"):
+            self.process_button.configure(text=process_button_text(self._selected_items()))
 
     def _apply_override(self) -> None:
         mode = ProcessingMode(self.mode_var.get())
@@ -1010,6 +1022,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             str(item.path),
             values=(item.path.name, classification, confidence, action, crop, item.status),
         )
+        self._update_process_button_label()
 
     def _set_progress(
         self,
@@ -1035,6 +1048,8 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         self.preview_button.configure(state=state)
         self.process_button.configure(state=state)
         self.cancel_button.configure(state=tk.NORMAL if busy else tk.DISABLED)
+        if not busy:
+            self._update_process_button_label()
 
     def _cancel(self) -> None:
         self.cancel_event.set()

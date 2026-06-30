@@ -79,7 +79,7 @@ def test_decision_summary_explains_analyzed_and_pending_files(tmp_path: Path) ->
     assert "Chosen action: copy" in summary
     assert "preserve it byte for byte" in summary
     assert "Analysis: pending" in summary
-    assert "Analyze + Process always performs any missing analysis first" in summary
+    assert "its label shows Analyze + Process when that work is pending" in summary
 
 
 def test_decision_summary_hides_crf_meaning_for_ffv1(tmp_path: Path) -> None:
