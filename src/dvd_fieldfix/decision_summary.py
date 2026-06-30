@@ -144,6 +144,7 @@ def build_decision_summary(
                 f"Cadence: {analysis.cadence or 'not established'}",
                 f"Field-match residual: {analysis.fieldmatch_residual_frames if analysis.fieldmatch_residual_frames is not None else 'not tested'} "
                 f"frames / {analysis.fieldmatch_residual_percent if analysis.fieldmatch_residual_percent is not None else 'n/a'}%",
+                f"Exact isolated conditional-QTGMC frames: {len(analysis.fieldmatch_residual_frame_numbers)}",
                 f"Residual/hybrid segments: {_segment_text(analysis)}",
                 f"Detected crop suggestion: {analysis.crop_suggestion or 'none'}",
                 f"Effective crop: {effective_crop(analysis, config)}",

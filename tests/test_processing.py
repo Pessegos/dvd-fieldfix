@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from dvd_fieldfix.models import (
     ProcessingMode,
     StreamInfo,
     TimelineSegment,
+    ValidationResult,
 )
 from dvd_fieldfix.processing import (
     _expected_output_fps,
@@ -23,7 +25,9 @@ from dvd_fieldfix.processing import (
     _fieldmatch_script,
     _hybrid_frame_ranges,
     _hybrid_script,
+    _is_expected_clean_hybrid_pair,
     _progressive_script,
+    _preserve_failed_validation_output,
     _sar_after_crop,
     color_arguments,
     color_bitstream_arguments,
@@ -265,3 +269,42 @@ def test_frame_range_lookup_uses_half_open_intervals() -> None:
     assert _frame_in_ranges(39, ranges)
     assert not _frame_in_ranges(20, ranges)
     assert not _frame_in_ranges(29, ranges)
+
+
+def test_hybrid_cadence_excludes_intentional_isolated_qtgmc_pairs() -> None:
+    ranges = [(20, 30)]
+    isolated = {8}
+    assert _is_expected_clean_hybrid_pair(15, ranges, isolated)
+    assert not _is_expected_clean_hybrid_pair(16, ranges, isolated)
+    assert not _is_expected_clean_hybrid_pair(17, ranges, isolated)
+    assert not _is_expected_clean_hybrid_pair(21, ranges, isolated)
+
+
+def test_failed_validation_output_is_preserved_with_recovery_manifest(tmp_path: Path) -> None:
+    partial = tmp_path / ".episode.partial.mkv"
+    partial.write_bytes(b"complete encoded data")
+    intended = tmp_path / "episode.mkv"
+    item = analysis(Classification.HYBRID)
+    item.media.path = str(tmp_path / "source.mkv")
+    validation = ValidationResult(valid=False, messages=["cadence mismatch"])
+
+    failed, manifest = _preserve_failed_validation_output(
+        partial,
+        intended,
+        "abc123",
+        item,
+        JobConfig(codec=CodecProfile.FFV1),
+        ProcessingMode.HYBRID50,
+        "hybrid50",
+        "source-hash",
+        validation,
+    )
+
+    assert failed.name == "episode.failed-validation.mkv"
+    assert failed.read_bytes() == b"complete encoded data"
+    assert not partial.exists()
+    assert manifest is not None and manifest.exists()
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    assert document["status"] == "failed_validation"
+    assert document["preserved_output"] == str(failed)
+    assert document["validation"]["valid"] is False

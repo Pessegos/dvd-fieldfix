@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-06-30
+
+Hybrid cadence-validation recovery release.
+
+### Fixed
+
+- Record every isolated frame that field matching intentionally sends to conditional QTGMC and exclude it from the duplicated-25p cadence test.
+- Prevent valid FFV1 hybrid encodes from being rejected near completion because intentional isolated 50p motion was counted as a failed duplicate.
+- Mark failed queue entries accurately instead of leaving their status as `Processing`.
+
+### Added
+
+- Preserve a completely encoded MKV as `*.failed-validation.mkv` when final validation fails, together with a recovery manifest and an explicit warning that it is not approved output.
+- Include the exact conditional-QTGMC frame count in decision summaries and JSON analysis data.
+
+### Changed
+
+- Bumped the processing fingerprint for exact frame-aware hybrid validation.
+
 ## [0.4.1] - 2026-06-30
 
 PAL colour-metadata and hybrid-validation fix.
@@ -99,3 +118,4 @@ First public release.
 [0.3.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.3.0
 [0.4.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.4.0
 [0.4.1]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.4.1
+[0.4.2]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.4.2

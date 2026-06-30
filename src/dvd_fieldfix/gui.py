@@ -35,7 +35,13 @@ from .models import (
 from .preview import generate_preview
 from .profiles import load_series_profile, save_series_profile
 from .processing import process_file
-from .tools import CancelledError, FieldFixError, ProgressDetails, Toolchain
+from .tools import (
+    CancelledError,
+    FieldFixError,
+    OutputValidationError,
+    ProgressDetails,
+    Toolchain,
+)
 
 
 BG = "#181a1f"
@@ -724,13 +730,23 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
                     details,
                 )
 
-            result = process_file(
-                item.analysis,
-                config,
-                self.tools,
-                cancel_event=self.cancel_event,
-                progress=callback,
-            )
+            try:
+                result = process_file(
+                    item.analysis,
+                    config,
+                    self.tools,
+                    cancel_event=self.cancel_event,
+                    progress=callback,
+                )
+            except OutputValidationError as exc:
+                item.output = Path(exc.preserved_output)
+                item.status = "Validation failed — encoded output preserved"
+                self.after(0, self._refresh_item, item)
+                raise
+            except FieldFixError:
+                item.status = "Failed"
+                self.after(0, self._refresh_item, item)
+                raise
             item.result = result
             item.output = Path(result.output)
             item.status = "Already completed" if result.skipped else "Completed and validated"

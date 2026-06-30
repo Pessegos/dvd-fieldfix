@@ -10,7 +10,7 @@ from typing import Any
 
 
 REPORT_SCHEMA_VERSION = 1
-PROCESSING_PIPELINE_VERSION = 10
+PROCESSING_PIPELINE_VERSION = 11
 
 
 class Classification(str, enum.Enum):
@@ -140,6 +140,10 @@ class AnalysisResult:
     crop_suggestion: str | None = None
     hybrid_segments: list[TimelineSegment] = field(default_factory=list)
     fieldmatch_residual_segments: list[TimelineSegment] = field(default_factory=list)
+    # Exact input-frame indices still marked _Combed by field matching. The
+    # hybrid graph intentionally sends these isolated frames to QTGMC even
+    # outside sustained 50i segments, so cadence validation must exclude them.
+    fieldmatch_residual_frame_numbers: list[int] = field(default_factory=list)
     suggested_mode: ProcessingMode | None = None
     warnings: list[str] = field(default_factory=list)
 

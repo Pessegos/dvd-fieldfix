@@ -33,6 +33,7 @@ from .tools import (
     DependencyError,
     FFmpegProgressState,
     OutputCollisionError,
+    OutputValidationError,
     ProcessingError,
     ProgressCallback,
     Toolchain,
@@ -467,6 +468,9 @@ def process_file(
                 frame_count_valid=True,
                 clean_pair_match_percent=100.0,
                 cadence_valid=True,
+                expected_color_tags=normalized_color_tags(analysis),
+                output_color_tags=normalized_color_tags(analysis),
+                color_tags_valid=True,
                 messages=["Byte-for-byte copy confirmed by SHA-256"],
             )
             action = "copy"
@@ -497,7 +501,24 @@ def process_file(
         else:
             raise ProcessingError(f"Mode not implemented: {mode}")
         if not validation.valid:
-            raise ProcessingError("Output validation failed: " + "; ".join(validation.messages))
+            failed_output, failed_manifest = _preserve_failed_validation_output(
+                partial,
+                output,
+                token,
+                analysis,
+                config,
+                mode,
+                action,
+                source_hash,
+                validation,
+            )
+            raise OutputValidationError(
+                "Output validation failed: "
+                + "; ".join(validation.messages)
+                + f"\n\nThe completed encode was preserved for recovery at:\n{failed_output}",
+                str(failed_output),
+                str(failed_manifest) if failed_manifest else None,
+            )
         output_hash = sha256_file(partial)
         if output.exists():
             output.unlink()
@@ -531,6 +552,53 @@ def process_file(
     finally:
         partial.unlink(missing_ok=True)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _preserve_failed_validation_output(
+    partial: Path,
+    intended_output: Path,
+    token: str,
+    analysis: AnalysisResult,
+    config: JobConfig,
+    mode: ProcessingMode,
+    action: str,
+    source_hash: str,
+    validation: ValidationResult,
+) -> tuple[Path, Path | None]:
+    failed_output = intended_output.with_name(
+        f"{intended_output.stem}.failed-validation{intended_output.suffix}"
+    )
+    if failed_output.exists():
+        failed_output = intended_output.with_name(
+            f"{intended_output.stem}.failed-validation-{token}{intended_output.suffix}"
+        )
+    os.replace(partial, failed_output)
+    failed_manifest = failed_output.with_name(failed_output.name + MANIFEST_SUFFIX)
+    document = {
+        "schema_version": 1,
+        "pipeline_version": PROCESSING_PIPELINE_VERSION,
+        "status": "failed_validation",
+        "source": analysis.media.path,
+        "source_sha256": source_hash,
+        "intended_output": str(intended_output),
+        "preserved_output": str(failed_output),
+        "output_sha256": None,
+        "action": action,
+        "mode": mode.value,
+        "config_fingerprint": config.fingerprint(),
+        "config": to_dict(config),
+        "analysis": to_dict(analysis),
+        "validation": to_dict(validation),
+        "recovery_note": (
+            "The encode completed but did not pass validation. It was preserved "
+            "for diagnosis or revalidation and must not be treated as approved output."
+        ),
+    }
+    try:
+        json_dump_atomic(failed_manifest, document)
+    except OSError:
+        return failed_output, None
+    return failed_output, failed_manifest
 
 
 def _existing_result(
@@ -1033,6 +1101,19 @@ def _frame_in_ranges(frame: int, ranges: list[tuple[int, int]]) -> bool:
     return any(start <= frame < end for start, end in ranges)
 
 
+def _is_expected_clean_hybrid_pair(
+    output_frame: int,
+    hybrid_ranges: list[tuple[int, int]],
+    isolated_residual_frames: set[int],
+) -> bool:
+    """Return true only for pairs the graph intentionally duplicates."""
+    return (
+        output_frame % 2 == 1
+        and not _frame_in_ranges(output_frame, hybrid_ranges)
+        and output_frame // 2 not in isolated_residual_frames
+    )
+
+
 def _scan_temporal_cadence(
     analysis: AnalysisResult,
     output_media: MediaInfo,
@@ -1077,6 +1158,7 @@ def _scan_temporal_cadence(
     current_frame: int | None = None
     error_lines: list[str] = []
     hybrid_ranges = _hybrid_frame_ranges(analysis) if mode == ProcessingMode.HYBRID50 else []
+    isolated_residual_frames = set(analysis.fieldmatch_residual_frame_numbers)
     expected_frames = _expected_output_frames(analysis, mode)
     started = time.monotonic()
     state = FFmpegProgressState()
@@ -1094,8 +1176,11 @@ def _scan_temporal_cadence(
             if ydif_match and current_frame is not None:
                 if (
                     mode == ProcessingMode.HYBRID50
-                    and current_frame % 2 == 1
-                    and not _frame_in_ranges(current_frame, hybrid_ranges)
+                    and _is_expected_clean_hybrid_pair(
+                        current_frame,
+                        hybrid_ranges,
+                        isolated_residual_frames,
+                    )
                 ):
                     clean_pairs += 1
                     if float(ydif_match.group(1)) <= CLEAN_PAIR_YDIF_THRESHOLD:
@@ -1231,7 +1316,7 @@ def validate_output(
         result.messages.append("Full decoding found errors: " + errors[-500:])
     if progress:
         progress(0.90, "Checking for residual combing", None)
-    residual_frames, residual_percent, _ = scan_fieldmatch_residual(
+    residual_frames, residual_percent, _, _ = scan_fieldmatch_residual(
         output_media,
         tools,
         analysis.field_order or "tff",

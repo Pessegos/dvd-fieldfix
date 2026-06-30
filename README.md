@@ -125,12 +125,15 @@ Validation checks:
 - audio, subtitle and attachment stream counts;
 - exact decoded frame count for 25p, 50p and decimated 23.976p paths;
 - duplicated-frame cadence outside confirmed 50i sections of hybrid PAL sources;
+- exact exclusion of isolated frames intentionally sent to conditional QTGMC;
 - expected frame rate and progressive field flag;
 - residual combing;
 - SAR/DAR preservation.
 - colour range, matrix, transfer and primaries preservation.
 
 A completed output is skipped only when its source hash, pipeline version, configuration and output hash all match. Incompatible collisions are blocked.
+
+If encoding completes but validation fails, the MKV is preserved as `*.failed-validation.mkv` with a recovery manifest instead of being deleted. It remains explicitly unapproved until the validation problem is resolved.
 
 ## Real-source test samples
 

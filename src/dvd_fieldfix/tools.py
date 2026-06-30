@@ -29,6 +29,18 @@ class ProcessingError(FieldFixError):
     pass
 
 
+class OutputValidationError(ProcessingError):
+    def __init__(
+        self,
+        message: str,
+        preserved_output: str,
+        preserved_manifest: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.preserved_output = preserved_output
+        self.preserved_manifest = preserved_manifest
+
+
 class AmbiguousSourceError(ProcessingError):
     pass
 

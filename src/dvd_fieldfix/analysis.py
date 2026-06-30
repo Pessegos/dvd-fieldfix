@@ -294,7 +294,7 @@ def scan_fieldmatch_residual(
     *,
     cancel_event: threading.Event | None = None,
     progress: ProgressCallback | None = None,
-) -> tuple[int, float, list[TimelineSegment]]:
+) -> tuple[int, float, list[TimelineSegment], list[int]]:
     assert tools.ffmpeg
     command = [
         tools.ffmpeg,
@@ -326,6 +326,7 @@ def scan_fieldmatch_residual(
     )
     residual = 0
     residual_bins: Counter[int] = Counter()
+    residual_frame_numbers: list[int] = []
     error_lines: list[str] = []
     expected_frames = max(
         1,
@@ -346,6 +347,7 @@ def scan_fieldmatch_residual(
                 match = FIELDMATCH_FRAME_RE.search(line)
                 if match:
                     frame_number = int(match.group(1))
+                    residual_frame_numbers.append(frame_number)
                     fps = parse_rate(media.video.average_frame_rate) if media.video else 25.0
                     # One-second bins are precise enough to find short 50i inserts
                     # without switching ten seconds of clean 25p to QTGMC.
@@ -377,7 +379,7 @@ def scan_fieldmatch_residual(
     fps = parse_rate(media.video.average_frame_rate) if media.video else None
     total = max(1, round(media.duration * (fps or 25.0)))
     segments = _residual_segments(residual_bins, fps or 25.0, media.duration)
-    return residual, 100.0 * residual / total, segments
+    return residual, 100.0 * residual / total, segments, residual_frame_numbers
 
 
 def _residual_segments(
@@ -592,7 +594,12 @@ def analyze_file(
         )
     if progress:
         progress(0.0, "Testing field matching", None)
-    residual_frames, residual_percent, residual_segments = scan_fieldmatch_residual(
+    (
+        residual_frames,
+        residual_percent,
+        residual_segments,
+        residual_frame_numbers,
+    ) = scan_fieldmatch_residual(
         media,
         tools,
         str(field_order),
@@ -603,6 +610,7 @@ def analyze_file(
         fieldmatch_residual_frames=residual_frames,
         fieldmatch_residual_percent=residual_percent,
         fieldmatch_residual_segments=residual_segments,
+        fieldmatch_residual_frame_numbers=residual_frame_numbers,
     )
     pal = math.isclose(fps, 25.0, abs_tol=0.08)
     ntsc = math.isclose(fps, 30000 / 1001, abs_tol=0.08)

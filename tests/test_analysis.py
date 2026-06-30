@@ -106,7 +106,7 @@ def test_progressive_classification(probe, scan, _crop) -> None:
 @patch("dvd_fieldfix.analysis.detect_crop", return_value=None)
 @patch(
     "dvd_fieldfix.analysis.scan_fieldmatch_residual",
-    return_value=(50, 0.5, [TimelineSegment(40.5, 42.5, 100.0)]),
+    return_value=(50, 0.5, [TimelineSegment(40.5, 42.5, 100.0)], [1012]),
 )
 @patch("dvd_fieldfix.analysis.scan_idet")
 @patch("dvd_fieldfix.analysis.probe_media")
@@ -122,7 +122,7 @@ def test_local_interlace_is_not_hidden_by_low_global_percentage(probe, scan, _re
 
 
 @patch("dvd_fieldfix.analysis.detect_crop", return_value=None)
-@patch("dvd_fieldfix.analysis.scan_fieldmatch_residual", return_value=(2, 0.08, []))
+@patch("dvd_fieldfix.analysis.scan_fieldmatch_residual", return_value=(2, 0.08, [], [10, 20]))
 @patch("dvd_fieldfix.analysis.scan_idet")
 @patch("dvd_fieldfix.analysis.probe_media")
 def test_pal_fieldmatch_classification(probe, scan, _residual, _crop) -> None:
@@ -137,7 +137,7 @@ def test_pal_fieldmatch_classification(probe, scan, _residual, _crop) -> None:
 @patch("dvd_fieldfix.analysis.detect_crop", return_value=None)
 @patch(
     "dvd_fieldfix.analysis.scan_fieldmatch_residual",
-    return_value=(90, 3.6, [TimelineSegment(80.5, 84.5, 80.0)]),
+    return_value=(90, 3.6, [TimelineSegment(80.5, 84.5, 80.0)], [2025]),
 )
 @patch("dvd_fieldfix.analysis.scan_idet")
 @patch("dvd_fieldfix.analysis.probe_media")
@@ -148,10 +148,11 @@ def test_pal_hybrid_classification(probe, scan, _residual, _crop) -> None:
     assert result.classification == Classification.HYBRID
     assert result.suggested_mode == ProcessingMode.HYBRID50
     assert result.suggested_output_fps == "50/1"
+    assert result.fieldmatch_residual_frame_numbers == [2025]
 
 
 @patch("dvd_fieldfix.analysis.detect_crop", return_value=None)
-@patch("dvd_fieldfix.analysis.scan_fieldmatch_residual", return_value=(700, 28.0, []))
+@patch("dvd_fieldfix.analysis.scan_fieldmatch_residual", return_value=(700, 28.0, [], [1]))
 @patch("dvd_fieldfix.analysis.scan_idet")
 @patch("dvd_fieldfix.analysis.probe_media")
 def test_true_interlace_classification(probe, scan, _residual, _crop) -> None:
@@ -164,7 +165,7 @@ def test_true_interlace_classification(probe, scan, _residual, _crop) -> None:
 
 
 @patch("dvd_fieldfix.analysis.detect_crop", return_value=None)
-@patch("dvd_fieldfix.analysis.scan_fieldmatch_residual", return_value=(300, 12.0, []))
+@patch("dvd_fieldfix.analysis.scan_fieldmatch_residual", return_value=(300, 12.0, [], [1]))
 @patch("dvd_fieldfix.analysis.scan_idet")
 @patch("dvd_fieldfix.analysis.probe_media")
 def test_middle_residual_is_ambiguous(probe, scan, _residual, _crop) -> None:
