@@ -23,7 +23,15 @@ except ImportError:
 
 from .analysis import analyze_file, collect_inputs, write_analysis_report
 from . import __version__
-from .models import AnalysisResult, CodecProfile, CropMargins, JobConfig, ProcessingMode
+from .decision_summary import DecisionEntry, build_decision_summary
+from .models import (
+    AnalysisResult,
+    CodecProfile,
+    CropMargins,
+    JobConfig,
+    ProcessingMode,
+    ProcessingResult,
+)
 from .preview import generate_preview
 from .profiles import load_series_profile, save_series_profile
 from .processing import process_file
@@ -96,6 +104,7 @@ class QueueItem:
     override: ProcessingMode = ProcessingMode.AUTO
     status: str = "Not analyzed"
     output: Path | None = None
+    result: ProcessingResult | None = None
 
 
 class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
@@ -133,6 +142,20 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         style.configure("TCheckbutton", background=BG, foreground=TEXT)
         style.map("TCheckbutton", background=[("active", BG)], foreground=[("disabled", "#6f7580")])
         style.configure("TEntry", fieldbackground=SURFACE, foreground=TEXT, insertcolor=TEXT, bordercolor=BORDER)
+        style.configure(
+            "TSpinbox",
+            fieldbackground=SURFACE,
+            background=SURFACE_ALT,
+            foreground=TEXT,
+            insertcolor=TEXT,
+            arrowcolor=TEXT,
+            bordercolor=BORDER,
+        )
+        style.map(
+            "TSpinbox",
+            fieldbackground=[("disabled", SURFACE), ("readonly", SURFACE)],
+            foreground=[("disabled", MUTED), ("readonly", TEXT)],
+        )
         style.configure(
             "TCombobox",
             fieldbackground=SURFACE,
@@ -189,6 +212,14 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         save_report = ttk.Button(toolbar, text="Save report", command=self._save_report)
         save_report.pack(side=tk.LEFT, padx=3)
         self._tooltip(save_report, "Save completed detection results as a JSON report.")
+        decision_summary = ttk.Button(
+            toolbar, text="Decision summary", command=self._show_decision_summary
+        )
+        decision_summary.pack(side=tk.LEFT, padx=3)
+        self._tooltip(
+            decision_summary,
+            "Explain every series-wide and per-file decision, including evidence and validation.",
+        )
         load_profile = ttk.Button(toolbar, text="Load series profile", command=self._load_profile)
         load_profile.pack(side=tk.LEFT, padx=(12, 3))
         self._tooltip(
@@ -250,7 +281,8 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             self.codec_box,
             "H.264 maximizes compatibility; HEVC 10-bit improves compression and gradients; FFV1 is mathematically lossless but very large.",
         )
-        ttk.Label(options, text="CRF:").grid(row=0, column=2, sticky=tk.W)
+        self.crf_label = ttk.Label(options, text="CRF:")
+        self.crf_label.grid(row=0, column=2, sticky=tk.W)
         self.crf_var = tk.StringVar(value="14")
         self.crf_spin = ttk.Spinbox(
             options,
@@ -313,22 +345,25 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             "Remove only stable black borders found across seven samples. Disabled by default; preview before processing.",
         )
         self.denoise_var = tk.BooleanVar(value=False)
-        denoise = ttk.Checkbutton(options, text="Light denoise", variable=self.denoise_var)
-        denoise.grid(row=1, column=4, padx=10, pady=(8, 0), sticky=tk.W)
-        self._tooltip(
-            denoise,
-            "Apply a mild hqdn3d pass. It can improve compression but may remove texture, so it stays off by default.",
-        )
         self.dotcrawl_var = tk.BooleanVar(value=False)
-        dotcrawl = ttk.Checkbutton(
-            options,
-            text="Dot crawl / rainbow cleanup",
-            variable=self.dotcrawl_var,
+        self.restoration_status_var = tk.StringVar(value="Optional cleanup: preservation default")
+        restoration_status = ttk.Label(options, textvariable=self.restoration_status_var)
+        restoration_status.grid(
+            row=1, column=4, columnspan=3, padx=10, pady=(8, 0), sticky=tk.W
         )
-        dotcrawl.grid(row=1, column=5, columnspan=3, padx=10, pady=(8, 0), sticky=tk.W)
         self._tooltip(
-            dotcrawl,
-            "Apply one conservative spatial DotKillS pass after field reconstruction. Useful for composite-video artifacts; never automatic and always preview first.",
+            restoration_status,
+            "Denoise and composite-artifact filters remain off unless an advanced override is explicitly loaded or selected.",
+        )
+        restoration_overrides = ttk.Button(
+            options,
+            text="Advanced cleanup…",
+            command=self._advanced_restoration,
+        )
+        restoration_overrides.grid(row=1, column=7, columnspan=2, pady=(8, 0), sticky=tk.E)
+        self._tooltip(
+            restoration_overrides,
+            "Expert fallback only. Automatic per-series restoration requires calibrated evidence and is not guessed silently.",
         )
 
         ttk.Label(options, text="Output (blank = _fixed):").grid(
@@ -356,9 +391,14 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         self.preview_button = ttk.Button(actions, text="Preview", command=self._start_preview)
         self.preview_button.pack(side=tk.LEFT, padx=3)
         self._tooltip(self.preview_button, "Generate an original/corrected comparison for one selected file.")
-        self.process_button = ttk.Button(actions, text="Process", command=self._start_processing)
+        self.process_button = ttk.Button(
+            actions, text="Analyze + Process", command=self._start_processing
+        )
         self.process_button.pack(side=tk.LEFT, padx=3)
-        self._tooltip(self.process_button, "Process selected files, validate them fully, and never overwrite the sources.")
+        self._tooltip(
+            self.process_button,
+            "No separate analysis is required. Missing analysis runs first, then each output is processed and fully validated.",
+        )
         self.cancel_button = ttk.Button(actions, text="Cancel", command=self._cancel, state=tk.DISABLED)
         self.cancel_button.pack(side=tk.LEFT, padx=12)
         self._tooltip(self.cancel_button, "Stop the active analysis or encode and remove its partial output.")
@@ -424,10 +464,66 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         if directory:
             self.output_var.set(directory)
 
+    def _advanced_restoration(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("Advanced cleanup overrides")
+        window.resizable(False, False)
+        window.configure(background=BG)
+        window.after(50, _set_dark_titlebar, window)
+        frame = ttk.Frame(window, padding=14)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(
+            frame,
+            text=(
+                "These are expert overrides, not universal improvements. Leave them off unless "
+                "a preview and representative series samples show a real defect. Automatic "
+                "restoration will only be enabled after its detector is calibrated against "
+                "different real DVDs."
+            ),
+            wraplength=520,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(0, 12))
+        denoise = ttk.Checkbutton(
+            frame,
+            text="Force light denoise (hqdn3d=1:1:3:3)",
+            variable=self.denoise_var,
+            command=self._update_restoration_status,
+        )
+        denoise.pack(anchor=tk.W, pady=4)
+        self._tooltip(
+            denoise,
+            "May improve compression but can remove intended grain and fine texture.",
+        )
+        dotcrawl = ttk.Checkbutton(
+            frame,
+            text="Force one spatial DotKillS pass",
+            variable=self.dotcrawl_var,
+            command=self._update_restoration_status,
+        )
+        dotcrawl.pack(anchor=tk.W, pady=4)
+        self._tooltip(
+            dotcrawl,
+            "Targets dot crawl and rainbow artifacts after field reconstruction; may alter legitimate fine patterns.",
+        )
+        ttk.Button(frame, text="Close", command=window.destroy).pack(anchor=tk.E, pady=(12, 0))
+
+    def _update_restoration_status(self) -> None:
+        enabled: list[str] = []
+        if self.denoise_var.get():
+            enabled.append("forced light denoise")
+        if self.dotcrawl_var.get():
+            enabled.append("forced DotKillS")
+        self.restoration_status_var.set(
+            "Optional cleanup: " + (", ".join(enabled) if enabled else "preservation default")
+        )
+
     def _codec_changed(self, _event: object = None) -> None:
         if self.codec_var.get() == CodecProfile.FFV1.value:
-            self.crf_spin.configure(state=tk.DISABLED)
+            self.crf_label.grid_remove()
+            self.crf_spin.grid_remove()
         else:
+            self.crf_label.grid()
+            self.crf_spin.grid()
             self.crf_spin.configure(state=tk.NORMAL)
 
     def _load_profile(self) -> None:
@@ -454,6 +550,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         self.auto_crop_var.set(config.auto_crop)
         self.denoise_var.set(config.denoise)
         self.dotcrawl_var.set(config.dotcrawl)
+        self._update_restoration_status()
         self.jobs_var.set(str(profile.parallel_jobs))
         self.profile_var.set(f"Series profile: {profile.name}")
         self._codec_changed()
@@ -622,6 +719,7 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
                 cancel_event=self.cancel_event,
                 progress=callback,
             )
+            item.result = result
             item.output = Path(result.output)
             item.status = "Already completed" if result.skipped else "Completed and validated"
             with progress_lock:
@@ -669,7 +767,67 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
         right = ttk.Label(frame, image=corrected_image)
         left.grid(row=1, column=0, padx=4)
         right.grid(row=1, column=1, padx=4)
+        buttons = ttk.Frame(frame, padding=(0, 8, 0, 0))
+        buttons.grid(row=2, column=0, columnspan=2)
+        save_original = ttk.Button(
+            buttons,
+            text="Save original PNG…",
+            command=lambda: self._save_preview_image(
+                original, f"{item.path.stem}-original.png"
+            ),
+        )
+        save_original.pack(side=tk.LEFT, padx=4)
+        self._tooltip(save_original, "Export the displayed source frame as a lossless PNG.")
+        save_corrected = ttk.Button(
+            buttons,
+            text="Save corrected PNG…",
+            command=lambda: self._save_preview_image(
+                corrected, f"{item.path.stem}-corrected.png"
+            ),
+        )
+        save_corrected.pack(side=tk.LEFT, padx=4)
+        self._tooltip(save_corrected, "Export the displayed corrected frame as a lossless PNG.")
+        save_both = ttk.Button(
+            buttons,
+            text="Save both PNGs…",
+            command=lambda: self._save_preview_pair(item, original, corrected),
+        )
+        save_both.pack(side=tk.LEFT, padx=4)
+        self._tooltip(save_both, "Export both frames into one chosen folder.")
         window._images = (original_image, corrected_image)  # type: ignore[attr-defined]
+
+    def _save_preview_image(self, source: Path, suggested_name: str) -> None:
+        destination = filedialog.asksaveasfilename(
+            title="Save preview frame",
+            defaultextension=".png",
+            filetypes=[("PNG image", "*.png")],
+            initialfile=suggested_name,
+        )
+        if destination:
+            shutil.copy2(source, destination)
+            self.status_var.set(f"Saved preview frame: {destination}")
+
+    def _save_preview_pair(
+        self,
+        item: QueueItem,
+        original: Path,
+        corrected: Path,
+    ) -> None:
+        directory = filedialog.askdirectory(title="Choose a folder for both preview frames")
+        if not directory:
+            return
+        destination = Path(directory)
+        original_output = destination / f"{item.path.stem}-original.png"
+        corrected_output = destination / f"{item.path.stem}-corrected.png"
+        collisions = [path for path in (original_output, corrected_output) if path.exists()]
+        if collisions and not messagebox.askyesno(
+            "Replace preview images?",
+            "One or both preview PNGs already exist. Replace them?",
+        ):
+            return
+        shutil.copy2(original, original_output)
+        shutil.copy2(corrected, corrected_output)
+        self.status_var.set(f"Saved both preview frames to {destination}")
 
     def _doctor(self) -> None:
         self.status_var.set("Checking the processing setup…")
@@ -681,6 +839,94 @@ class FieldFixWindow(BaseWindow):  # type: ignore[misc,valid-type]
             self.after(0, self.status_var.set, "Setup check completed")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _decision_summary_text(self) -> str:
+        config = self._config()
+        entries = [
+            DecisionEntry(
+                analysis=item.analysis,
+                override=item.override,
+                status=item.status,
+                source=item.path,
+                result=item.result,
+            )
+            for item in self.items.values()
+        ]
+        profile_name = self.profile_var.get().removeprefix("Series profile: ")
+        return build_decision_summary(
+            entries,
+            config,
+            parallel_jobs=int(self.jobs_var.get()),
+            profile_name=profile_name,
+        )
+
+    def _show_decision_summary(self) -> None:
+        if not self.items:
+            messagebox.showinfo("DVD FieldFix", "Add at least one MKV first.")
+            return
+        try:
+            summary = self._decision_summary_text()
+        except ValueError as exc:
+            messagebox.showerror("Invalid options", str(exc))
+            return
+        window = tk.Toplevel(self)
+        window.title("DVD FieldFix — Decision summary")
+        window.geometry("980x720")
+        window.configure(background=BG)
+        window.after(50, _set_dark_titlebar, window)
+        body = ttk.Frame(window, padding=10)
+        body.pack(fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(body)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text = tk.Text(
+            body,
+            wrap=tk.WORD,
+            background=SURFACE,
+            foreground=TEXT,
+            insertbackground=TEXT,
+            selectbackground=ACCENT,
+            selectforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=12,
+            yscrollcommand=scrollbar.set,
+        )
+        text.insert("1.0", summary)
+        text.configure(state=tk.DISABLED)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=text.yview)
+        actions = ttk.Frame(window, padding=(10, 0, 10, 10))
+        actions.pack(fill=tk.X)
+        copy_button = ttk.Button(
+            actions,
+            text="Copy to clipboard",
+            command=lambda: self._copy_summary(summary),
+        )
+        copy_button.pack(side=tk.LEFT, padx=4)
+        save_button = ttk.Button(
+            actions,
+            text="Save as text…",
+            command=lambda: self._save_summary(summary),
+        )
+        save_button.pack(side=tk.LEFT, padx=4)
+        ttk.Button(actions, text="Close", command=window.destroy).pack(side=tk.RIGHT, padx=4)
+
+    def _copy_summary(self, summary: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(summary)
+        self.update_idletasks()
+        self.status_var.set("Decision summary copied to the clipboard")
+
+    def _save_summary(self, summary: str) -> None:
+        destination = filedialog.asksaveasfilename(
+            title="Save decision summary",
+            defaultextension=".txt",
+            filetypes=[("Text document", "*.txt")],
+            initialfile="dvd-fieldfix-decision-summary.txt",
+        )
+        if destination:
+            Path(destination).write_text(summary, encoding="utf-8")
+            self.status_var.set(f"Saved decision summary: {destination}")
 
     def _save_report(self) -> None:
         results = [item.analysis for item in self.items.values() if item.analysis]

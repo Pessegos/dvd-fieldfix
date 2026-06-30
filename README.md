@@ -13,7 +13,7 @@ DVD FieldFix analyzes MKV files sourced from DVDs and applies the least destruct
 - hybrid PAL uses VFM for the 25p body and QTGMC for confirmed 50i segments, producing progressive 50p;
 - true interlaced video uses VapourSynth/QTGMC at 50p or 59.94p;
 - hybrid NTSC and contradictory results stop for manual review rather than risk an incorrect cadence;
-- the dark-mode GUI provides drag-and-drop, tooltips, reusable series profiles, detailed encoding progress and conservative opt-in restoration.
+- the dark-mode GUI provides drag-and-drop, tooltips, reusable series profiles, detailed encoding progress, PNG preview export and an extensive decision summary.
 
 Original files are never overwritten. Outputs are written to a `_fixed` subfolder by default, created as `.partial.mkv`, fully validated, and only then renamed atomically.
 
@@ -55,6 +55,8 @@ Open the GUI:
 dvd-fieldfix gui
 ```
 
+`Analyze` is optional and is useful for inspecting classifications before committing to an encode. `Analyze + Process` always performs any missing analysis itself before choosing and validating the processing path.
+
 Analyze a folder:
 
 ```powershell
@@ -94,6 +96,10 @@ The GUI saves codec, CRF, crop, cleanup and parallel-job choices as a reusable J
 The status line reports current/total frames, encoding FPS, elapsed time and ETA. Two parallel jobs can improve total HEVC throughput on SD material; one remains the memory-conservative default.
 
 Dot-crawl/rainbow cleanup uses one optional spatial DotKillS pass after field reconstruction. It is off by default and should be previewed. Cadence-dependent temporal variants are not selected automatically.
+
+The GUI keeps denoise and DotKill in an **Advanced cleanup** dialog rather than asking normal users to diagnose analogue artifacts. Automatic cleanup is intentionally not enabled until it can make a calibrated per-DVD/series decision; uncertain evidence always means preserve. See [Automatic restoration policy](docs/AUTOMATIC_RESTORATION.md).
+
+Preview windows can export the original frame, corrected frame or both as lossless PNG files. The **Decision summary** window can be copied or saved as text and records series-wide encoder choices, per-file field evidence, action rationale, streams, color/aspect policy and final validation.
 
 ## Temporal pipeline
 

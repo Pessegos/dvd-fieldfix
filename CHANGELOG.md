@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-06-30
+
+Decision-transparency and preview-export release.
+
+### Added
+
+- Extensive series/per-file decision summary with evidence, rationale, encoder arguments, stream policy, hashes and output validation; summaries can be copied or saved as text.
+- Lossless PNG export for the original preview frame, corrected preview frame or both.
+- A documented conservative automatic-restoration policy and calibration requirements for future per-DVD/series dot-crawl and noise assessment.
+
+### Changed
+
+- Renamed the main action to `Analyze + Process` and clarified that a separate analysis pass is optional.
+- Hide the CRF label and input completely for lossless FFV1, then restore them when H.264 or HEVC is selected.
+- Added a dedicated dark-theme `TSpinbox` style so the CRF value remains readable.
+- Moved denoise and DotKill checkboxes out of the primary profile into an explicitly warned Advanced cleanup dialog.
+- Kept preservation as the automatic result while restoration evidence is uncalibrated or contradictory.
+
 ## [0.3.0] - 2026-06-29
 
 Series-quality and restoration release.
@@ -62,3 +80,4 @@ First public release.
 [0.1.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.2.0
 [0.3.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.3.0
+[0.4.0]: https://github.com/Pessegos/dvd-fieldfix/releases/tag/v0.4.0
